@@ -73,3 +73,29 @@ Dated, append-only log. A few notes per session: what was done, why decisions we
 
 ### Next
 - Stage 4 — simulation engine (`simulation.py`) + HDF5 output (`h5py` needs installing first).
+
+---
+
+## 2026-07-04 — Stage 4: Simulation engine (`simulation.py`)
+
+### What I built
+- `Trajectory` dataclass — a whole-run bundle: 5 arrays (`positions`, `velocities`, `accelerations` `(T,N,3)`; `times` `(T,)`; `masses` `(N,)`) + 7 scalar metadata fields.
+- `run_simulation(...)` — pre-allocates history arrays, records row 0 as the initial state, steps/records `n_steps` times, returns a `Trajectory`.
+- `save_trajectory(traj, path)` — HDF5 write: 7 attrs, big three datasets gzip-compressed, `masses`/`times` plain.
+- `tests/test_simulation.py` — 4 tests. Full suite 10/10.
+
+### Key points
+- **Return, don't write.** `run_simulation` returns arrays; `save_trajectory` is separate — keeps the loop testable without disk.
+- **Row 0 = initial state**, so `n_steps + 1` rows and `times[0] == 0`. Record *before* stepping; uniform "step-then-record" loop after.
+- **`forces_func` closure** bakes `G`/softening into a one-arg function the integrators expect. **`times[i] = i*dt`** (not accumulated) to avoid float drift.
+- **Name mapping:** `softening` → attr `epsilon`; integrator name from `__name__` with `_step` stripped.
+
+### Validation
+- Shapes correct; row 0 exactly equals initial positions; circular orbit stays bounded over 5 periods (`<1e-3`); HDF5 round-trip (save → reopen via `tmp_path`) with right shapes and attrs.
+
+### What broke / env
+- Ran on **Python 3.14.6** (`C:\Python314`, no active venv) — Stage 0's 3.12 venv note no longer matches. `h5py`/`pytest` were missing, installed into 3.14 user site; all tests now pass. TODO: pick a canonical env.
+- Added `h5py==3.16.0` to `requirements.txt`.
+
+### Next
+- Stage 5 — scenario library + data generation pipeline (`scenarios.py`).

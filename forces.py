@@ -4,6 +4,12 @@ import numpy as np
 
 
 def compute_accelerations(state, G=1.0, softening=0.0):
+    """Computes grav acceleration on every body from every other body.
+    
+    Softening (ε) keeps the acceleration finite when two bodies are very close, adds ε² to the squared distance. 
+    
+    Returns an (N, 3) array, row i is the acceleration vector on body i"""
+    
     positions = state.positions  # (N, 3)
     masses = state.masses  # (N,)
     disp = positions[None, :, :] - positions[:, None, :]  # (N, N, 3), disp[i,j] = r_j - r_i
