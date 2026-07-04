@@ -99,3 +99,20 @@ Dated, append-only log. A few notes per session: what was done, why decisions we
 
 ### Next
 - Stage 5 — scenario library + data generation pipeline (`scenarios.py`).
+
+---
+
+## 2026-07-04 — GNN learning track: 3Blue1Brown Neural Networks series
+
+### What I did
+- Watched all 4 videos (~1 hr) — neuron/layer basics, gradient descent, backprop intuition, backprop calculus.
+
+### Key points
+- Core idea that stuck: backprop = repeatedly applying the chain rule backward through the network, each layer only needs the local derivative and the gradient handed to it from the layer after.
+- Gradient descent = loss as a landscape, weights move opposite the gradient to go downhill.
+
+### Still fuzzy
+- Exactly how gradients combine when a value/weight feeds into more than one path — expecting this to click properly in micrograd when I have to code it by hand.
+
+### Next
+- Karpathy micrograd, split across two sessions per Claude's advice.
