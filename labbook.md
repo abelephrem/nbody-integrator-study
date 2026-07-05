@@ -116,3 +116,22 @@ Dated, append-only log. A few notes per session: what was done, why decisions we
 
 ### Next
 - Karpathy micrograd, split across two sessions per Claude's advice.
+
+---
+
+## 2026-07-04 — GNN learning track: Karpathy micrograd (Part 1, up to ~1:22:27+)
+
+### What I did
+- Built the `Value` class by hand: wraps a number, remembers the op/children that made it, visualized with `draw_dot`. Did backprop manually on a small expression and a full neuron (`x1*w1 + x2*w2 + b -> tanh -> o`), then automated it by giving each op (`+`, `*`, `tanh`) a `_backward()` local-derivative rule.
+
+### What I learnt
+- Each node's gradient = local derivative x incoming downstream gradient — chain rule, node by node (matches 3B1B calculus video).
+- Per-op rules: `+` passes grad through unchanged; `*` gives each input `other.data x incoming grad`; `tanh` scales by `(1 - tanh(x)^2)`.
+- Grads must use `+=` not `=`: a `Value` used on more than one path has to accumulate contributions from all of them (multivariable chain rule); `=` silently breaks this.
+- Topological sort puts every node before its dependents; walking it in reverse and calling `_backward()` backprops the whole graph in one `o.backward()` call — this is what PyTorch's `.backward()` does under the hood (`Value` = scalar toy version of a tensor), the foundation for the later `torch`/`torch_geometric` GNN stages.
+
+### Still fuzzy
+- Was coding along while watching — don't fully remember the syntax, but mostly get the logic.
+
+### Next
+- Second half of the micrograd video (neuron/layer/MLP classes, training on a toy dataset), as a separate session.
