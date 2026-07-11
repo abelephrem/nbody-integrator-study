@@ -135,3 +135,32 @@ Dated, append-only log. A few notes per session: what was done, why decisions we
 
 ### Next
 - Second half of the micrograd video (neuron/layer/MLP classes, training on a toy dataset), as a separate session.
+
+---
+
+## 2026-07-11 — Stage 5 Part 1: named scenarios + validation suite (`scenarios.py`, `analysis.py`)
+
+### What I built
+- `analysis.py`: `total_energy(state, G, softening)`, `angular_momentum(state)`.
+- `scenarios.py`: `_kepler_two_body` + `two_body_circular`/`two_body_eccentric` wrappers, `figure_eight`, `_zero_com`, `chaotic_cluster`.
+- `tests/test_scenarios.py` — 4 tests. Full suite 14/14.
+- **Split Stage 5 in two:** Part 1 = named scenarios + validation (here); Part 2 = the sweep/pipeline. The pipeline's new infra (cadence resampling, metadata tagging, 3D orientation) all lives in Part 2, so Part 1 stands alone.
+
+### Key decisions (why)
+- **`total_energy`/`angular_momentum` pulled forward into `analysis.py` (a Stage 6 file)** — the cluster generator rejection-samples on `E<0`, so it can't be built without them. Put in their eventual home to avoid a later duplicate that could drift.
+- **Softening-consistent potential:** `U ∝ -1/sqrt(r²+ε²)` (`**-0.5`) is the potential of the softened force in `forces.py` (`**-1.5`). Mismatch would make the `E<0` check inconsistent with the actual dynamics. (Plummer softening.)
+- **Two-body built at periapsis:** there `v_r=0`, so velocity is purely tangential (`[0, v_peri, 0]`, `v_peri` from vis-viva) — no vector decomposition, and dodges Kepler's transcendental equation. Mass split `r1=(m2/M)r`, `r2=-(m1/M)r` preserves `r=r1-r2` and puts COM at origin *at rest* (period-return test needs no drift).
+- **`figure_eight` = published Moore 1993 IC, full 8 decimals** — orbit is stable but the ICs are knife-edge; truncating breaks the retrace. Wrote `r2=-r1`, `v1=v2=-v3/2` via negation to guarantee zero momentum and avoid a mistyped digit.
+- **Cluster via rejection sampling:** can't easily *construct* a bound random cluster but can cheaply *test* it (`E<0`) — draw Gaussian pos/vel, `_zero_com`, keep if bound. `vel_scale<pos_scale` biases toward bound so the loop accepts fast; seeded for reproducibility.
+- **Everything embedded 3D with `z=0`** — `SystemState` is 3D; two-body and figure-8 are planar. One code path.
+
+### Validation (differs per scenario)
+- **Two-body — period return** over `T=2π√(a³/GM)`. Eccentric is the sharp test: `T` is independent of `e`, so a wrong `v_peri` closes an orbit at the wrong period and fails. Passed at `atol=1e-2`, no tuning.
+- **figure-8 — full-period retrace** (bodies swap at sub-period symmetries, so only a full `T` returns each to its own start). Finer `dt=1e-4`; `T≈6.3259` is empirical, so `1e-2` sits near the error floor.
+- **Cluster — no retrace exists:** assert `E<0` + `np.all(np.isfinite(positions))` only. Deliberately *not* energy conservation — chaotic close encounters spike it transiently (Q5 softening story), so a tight assert would be flaky; drift is quantified in Part 2.
+
+### What broke / env
+- `.venv` was missing `h5py` (the Stage 4 env drift — that stage ran on a 3.14 user site). Importing `run_simulation` failed at its top-level `import h5py`. Fixed via `pip install -r requirements.txt` (already pinned). Env still not canonical — nail down before Part 2's longer runs.
+
+### Next
+- Stage 5 Part 2 — data pipeline. Resolve first: (1) snapshot cadence as post-hoc resampling (`run_simulation` only records fixed `dt`; `save_every_k` is a no-op); (2) metadata dict on `Trajectory`/`save_trajectory` for scenario-type + train/interp/extrap tags; (3) 3D orientation + non-dimensionalization (virial `R=GM²/2|E|`).
