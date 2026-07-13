@@ -1,6 +1,6 @@
 ﻿"""Time-stepping loop and history logging."""
 
-from dataclasses import dataclass  # for the trajectory bundle
+from dataclasses import dataclass, field  # for the trajectory bundle
 import numpy as np  # allocating/filling the history arrays
 from forces import compute_accelerations  # to build forces_func inside run_simulation
 import h5py
@@ -20,6 +20,7 @@ class Trajectory:
     scenario: str
     N_bodies: int
     N_steps: int
+    metadata: dict = field(default_factory=dict)  # provenance tags for the sweep
 
 
 def run_simulation(
@@ -86,6 +87,8 @@ def save_trajectory(traj, path):
         f.attrs["scenario"] = traj.scenario
         f.attrs["N_bodies"] = traj.N_bodies
         f.attrs["N_steps"] = traj.N_steps
+        for key, value in traj.metadata.items():
+            f.attrs[key] = value
         f.create_dataset("positions", data=traj.positions, chunks=True, compression="gzip")
         f.create_dataset("velocities", data=traj.velocities, chunks=True, compression="gzip")
         f.create_dataset("accelerations", data=traj.accelerations, chunks=True, compression="gzip")

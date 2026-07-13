@@ -164,3 +164,33 @@ Dated, append-only log. A few notes per session: what was done, why decisions we
 
 ### Next
 - Stage 5 Part 2 — data pipeline. Resolve first: (1) snapshot cadence as post-hoc resampling (`run_simulation` only records fixed `dt`; `save_every_k` is a no-op); (2) metadata dict on `Trajectory`/`save_trajectory` for scenario-type + train/interp/extrap tags; (3) 3D orientation + non-dimensionalization (virial `R=GM²/2|E|`).
+
+---
+
+## 2026-07-13 — Stage 5 Part 2: pipeline infrastructure (metadata, nondimensionalisation, sweep spec)
+
+### What I built
+- `simulation.py`: `metadata: dict` field on `Trajectory`; `save_trajectory` writes it generically into HDF5 attrs.
+- `scenarios.py`: sweep axis constants + baselines; `TrajectoryConfig`; `virial_radius`, `nondimensionalise`; `_stratified_over_intervals` (1-D LHS); `two_body_configs`, `cluster_configs`.
+- `tests/test_scenarios.py` — 3 new tests. Full suite green.
+- **Re-split the pipeline:** Part 2 = infrastructure (nothing runs yet); Part 3 = driver + `chaotic_cluster` extensions + cadence + dataset validation. Each Part 2 piece is tested and standalone, so committing here keeps the diff reviewable.
+
+### Key decisions (why)
+- **Metadata as a generic `dict`, not named fields** — the tags are experiment provenance, not physics, so `save_trajectory` loops the dict into attrs and `simulation.py` never learns the keys. Driver owns the schema. `field(default_factory=dict)` (not `={}`) avoids the shared-mutable-default trap. Populated by the driver, since `run_simulation` can't know the split.
+- **Nondimensionalise via virial `R = GM²/2|E|`, using conserved `E` not `U`** — `U` breathes over an orbit so a length built from it fluctuates; the virial relation `⟨U⟩=2E` swaps in the conserved `E`, giving one fixed `R`. Collapses every system onto the same dimensionless equation so the GNN learns physics, not units.
+- **Velocity scales by `√(GM/R)`, not `R`** — it's length/time, so `L_unit/T_unit`. Split `virial_radius` out so the two-body form `R=M²a/(m₁m₂)` is a direct test. Softening stays out of the function: as a fixed fraction of `R` it's just `ε'=f` once `R→1`, passed straight to the run.
+- **Sweep crossing = one-axis-at-a-time holdout** (over full factorial). Training = cross product of trained values; each generalisation test moves *one* axis off-distribution, others at a trained baseline. Full factorial is exponential and mixes interp+extrap → uninterpretable for G4. Interp and extrap kept as separate labels (genuinely different tests).
+- **Continuous `Q` via 1-D LHS over two disjoint intervals** — `uniform` clumps; stratified sampling (one jittered point per bin) covers evenly. Lay `[0.3,0.7]∪[1.1,1.5]` end-to-end, stratify, map back — the interpolation gap isn't on the concatenated line, so no training `Q` can land in it.
+- **Dataset size is fine because the GNN trains on snapshots, not trajectories** — hundreds of trajectories × hundreds of snapshots × N particles ≈ 10⁵⁺ examples. Coarse parameter grid is OK: it learns a local rule, not a param lookup. `n_orient`/`n_draws` are the knobs if G1 looks data-limited.
+
+### Validation
+- `virial_radius`: two-body `R=M²a/(m₁m₂)` with unequal masses + nonzero `e` (general formula, not the `4a` special case).
+- `nondimensionalise`: `Σm=1` **and** `virial_radius(nd)≈1` — the latter only holds if positions and velocities scaled consistently, so it catches the velocity-scaling mistake specifically.
+- `cluster_configs`: one-axis property per split + no training `Q` in the gap `(0.7,1.1)` (validates the map-back).
+
+### What broke
+- pytest runs the file *on disk* — an unsaved buffer runs stale code (bit us as `NoneType is not iterable` from a `return` that was typed but not saved). Habit: save before every run.
+- One-axis-holdout bugs caught in review before running: training block hardcoding `Q_BASELINE` instead of the sampled `Q`; a mislabeled "Q holdout" that was really the ratio holdout, leaving the real Q holdout unwritten and a stale `ratio=10` leaking two axes off-distribution.
+
+### Next
+- Stage 5 Part 3 — the driver. Extend `chaotic_cluster` (target `Q` by scaling velocities to `Q=2T/|U|`; mass-ratio definition for N>2); two-body random 3D orientation; cadence resampling (uniform stride first, then true-anomaly / event-triggered); driver (config → IC → nondimensionalise → Leapfrog → resample → tag → save); dataset-level validation (energy-drift spot-check + confirm realized `Q`/`N`/ratio).

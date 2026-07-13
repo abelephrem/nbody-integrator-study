@@ -1,5 +1,7 @@
 import numpy as np
-from scenarios import two_body_circular, two_body_eccentric, figure_eight, chaotic_cluster
+from scenarios import (two_body_circular, two_body_eccentric, figure_eight, chaotic_cluster, 
+                       virial_radius, nondimensionalise, cluster_configs, N_TRAINED, 
+                       RATIO_TRAINED, N_BASELINE, RATIO_BASELINE,)
 from simulation import run_simulation
 from integrators import leapfrog_step
 from analysis import total_energy
@@ -45,3 +47,32 @@ def test_cluster_is_bound_and_stays_finite():
 
     traj = run_simulation(state, leapfrog_step, dt=1e-3,n_steps=5000, scenario_name="chaotic_cluster", G=1.0)
     assert np.all(np.isfinite(traj.positions))  # no body escaped to inf/nan
+
+
+def test_virial_radius_two_body():
+    m1, m2, a = 2.0, 1.0, 1.5
+    state = two_body_eccentric(m1, m2, a=a, e=0.3)
+    R = virial_radius(state)
+    assert np.isclose(R, (m1+m2)**2 * a / (m1*m2))
+
+
+def test_non_dimensionalise_sets_unit_scales():
+    state = chaotic_cluster(N=5, seed=1)
+    nd = nondimensionalise(state)
+    assert np.isclose(np.sum(nd.masses), 1.0)  # total mass --> 1
+    assert np.isclose(virial_radius(nd), 1.0)  # length unit --> R=1
+
+
+def test_cluster_configs_one_axis_holdout():
+    cfgs = cluster_configs(n_draws=5)  # generate full list of configs
+    for c in cfgs:
+        p = c.params
+        if c.split == "train":
+            assert p["N"] in N_TRAINED and p["mass_ratio"] in RATIO_TRAINED  # makes sure axes are drawn from trained sets
+        elif c.split.startswith("Q"):
+            assert p["N"] == N_BASELINE and p["mass_ratio"] == RATIO_BASELINE
+    # no training Q ever lands in the interpolation gap (0.7, 1.1)
+    train_Q = [c.params["Q"] for c in cfgs if c.split == "train"]  
+    assert all(not (0.7 < q < 1.1) for q in train_Q)  # asserts no training Q fell in the interpolation gap 
+        
+
