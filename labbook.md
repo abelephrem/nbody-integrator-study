@@ -194,3 +194,29 @@ Dated, append-only log. A few notes per session: what was done, why decisions we
 
 ### Next
 - Stage 5 Part 3 — the driver. Extend `chaotic_cluster` (target `Q` by scaling velocities to `Q=2T/|U|`; mass-ratio definition for N>2); two-body random 3D orientation; cadence resampling (uniform stride first, then true-anomaly / event-triggered); driver (config → IC → nondimensionalise → Leapfrog → resample → tag → save); dataset-level validation (energy-drift spot-check + confirm realized `Q`/`N`/ratio).
+
+---
+
+## 2026-08-09 — Stage 5 Part 3: data-generation driver + dataset validation
+
+### What I built
+- `scenarios.py`: `chaotic_cluster` extended (target `Q`, `mass_ratio`); `random_orientation`; `build_initial_state`; resamplers (`resample_uniform`, `resample_true_anomaly`, `resample_events`); `generate_dataset` (driver, cadence dispatch); `validate_dataset`.
+- Tests for each; full suite green. Stage 5 now code-complete (Parts 1–3).
+
+### Key decisions (why)
+- **`Q`-targeting replaces the rejection loop.** `Q=2T/|U|`, `T ∝ v²`, so scaling velocities by `λ=√(Q_target/Q_current)` hits any `Q` exactly; `Q<2 ⟺ E<0` so it's bound by construction. Dropped `vel_scale` (washed out by `λ`).
+- **Cluster `mass_ratio` = one heavy body, rest equal** — crisp scalar (like two-body `m1/m2`), probes the test-particle regime; chosen over "spread" because a clean generalisation axis beats per-snapshot mass diversity.
+- **Random 3D orientation for two-body only** (clusters already isotropic). Safe: gravity is rotation-invariant, so energy/`Q`/distances are unchanged. Kills the planar `z=0` artifact.
+- **Cadence = post-hoc resampling** on the finished fixed-`dt` trajectory, not baked into `run_simulation`. True anomaly (two-body, denser at periapsis via uniform-in-angle); min-separation event triggers (cluster: uniform baseline + every close encounter). Kept `resample_uniform` as an ablation baseline.
+
+### Softening finding (important)
+- `validate_dataset` immediately caught **~200% energy drift on clusters** at `ε'=0.002, dt=0.01` — the validation working, not a bug. Cause: **unresolved close encounters** (crossing time `~ε'/v ≪ dt`, so Leapfrog's energy bound breaks).
+- Swept `(ε', dt)` on the real heavy-body configs: clean (`~1e-3`) needs **cluster `ε'=0.05, dt=1e-3`** (a heavy body digs a deeper well); small `ε'` is erratically catastrophic.
+- **Two-body wants the opposite** — small `ε'≈0.002` for `e=0.9` periapsis fidelity, and it has no encounter problem. → **per-scenario softening**, run as separate `generate_dataset` calls; each file records its own `epsilon`.
+
+### Open question → Project
+- Two-body `ε'=0.002` vs cluster `ε'=0.05` is a **25× difference in the softened force law**. Can one GNN learn both, or should `ε'` be a model input feature? G1/G4 design question — flag before GNN Stage A.
+
+### Next
+- Commit Stage 5; raise the softening question with the Project (point it here).
+- Stage 6 — `analysis.py`: energy/angular-momentum drift, position error vs analytic reference, convergence-order log-log fit (Q1–Q3).

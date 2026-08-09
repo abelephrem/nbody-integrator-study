@@ -1,8 +1,15 @@
 ﻿"""Initial condition scenarios — 2-body, figure-8, chaotic cluster."""
 import numpy as np
+import glob
+import h5py
 from bodies import Body, SystemState, bodies_to_state
 from analysis import total_energy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from scipy.spatial.transform import Rotation
+import os 
+from simulation import run_simulation, save_trajectory
+from integrators import leapfrog_step
+
 
 # Sweep axis definitions (one-axis-at-a-time holdout design)
 E_TRAINED = [0.0, 0.2, 0.4, 0.8]
@@ -85,18 +92,22 @@ def _zero_com(state):
     return SystemState(state.masses, new_pos, new_vel)
 
 
-def chaotic_cluster(N=5, seed=None, pos_scale=1.0, vel_scale=0.5, G=1.0):
-    """N equal-mass bodies with random positions/velocities, in the COM frame.
-    Rejection-samples until the system is bound (E < 0)"""
+def chaotic_cluster(N=5, Q=1.0, seed=None, mass_ratio=1.0, pos_scale=1.0, G=1.0):
+    """N equal-mass bodies, random geometry, COM frame, scaled to target virial ratio Q = 2T / |U|. Q < 2 --> bound (no rejection needed)"""
+    rng = np.random.default_rng(seed)
+    masses = np.ones(N)
+    masses[0] = mass_ratio  # one heavy body; rest stay at mass 1
+    positions = rng.normal(0.0, pos_scale, size=(N, 3))
+    velocities = rng.normal(0.0, 1.0, size=(N, 3))  # random directions; magnitude set by Q below
+    state = _zero_com(SystemState(masses, positions, velocities))
 
-    rng = np.random.default_rng(seed)  # seeded, reproducible for tests
-    while True:
-        masses = np.ones(N)
-        positions = rng.normal(0.0, pos_scale, size=(N, 3))
-        velocities = rng.normal(0.0, vel_scale, size=(N, 3))  # slow --> more often bound
-        state = _zero_com(SystemState(masses, positions, velocities))
-        if total_energy(state, G=G) < 0:  # keep only bound draws
-            return state
+    T = 0.5 * np.sum(state.masses * np.sum(state.velocities**2, axis=1))
+    U = total_energy(state, G=G) - T
+    lam = np.sqrt(Q / (2 * T / abs(U)))  # lambda = sqrt(Q_target / Q_current)
+    velocities = state.velocities * lam
+    return SystemState(state.masses, state.positions, velocities)
+
+    
         
 
 def virial_radius(state, G=1.0):
@@ -223,4 +234,163 @@ def cluster_configs(n_draws=10, seed0=1000):
                 "cluster", {"N": N_BASELINE, "Q": Q_BASELINE, "mass_ratio": ratio}, split, s))
             s += 1
 
-    return configs  
+    return configs
+
+
+def random_orientation(state, seed=None):
+    """Roatate positions and velocities by a uniformly-random 3D rotation.
+    Gravity is rotation-invariant, so the physics is unchanged - this only varies 
+    the orbital plane's orientation."""
+    rng = np.random.default_rng(seed)
+    R = Rotation.random(random_state=rng).as_matrix()  # (3,3) Haar-uniform rotation
+    positions = state.positions @ R.T  # applies the rotation to every body's position vector at once
+    velocities = state.velocities @ R.T  # same R for positions and velocities
+    return SystemState(state.masses, positions, velocities)
+
+
+def build_initial_state(config):
+    """Turn a TrajectoryConfig into a nondimenionalised initial SystemState"""
+    p = config.params
+    if config.scenario_type == "two_body":
+        state = two_body_eccentric(m1=p["mass_ratio"], m2=1.0, a=1.0, e=p["e"])  # a=1.0 is arbitary, always produces same nondimensional system
+        state = random_orientation(state, seed=config.seed)  # seed.config drives random 3D orientation
+    elif config.scenario_type == "cluster":
+        state = chaotic_cluster(N=p["N"], Q=p["Q"], mass_ratio=p["mass_ratio"], seed=config.seed)  # seed.config drives random geometry
+    else: raise ValueError(f"unknown scenario_type: {config.scenario_type}")
+
+    return nondimensionalise(state)  # applied to both scenarios at end
+
+
+def resample_uniform(traj, n_keep):
+    """Keep n_keep evenly-spaced (uniform in time) snapshots. Placeholder cadence."""  
+    idx = np.linspace(0, len(traj.times) - 1, n_keep, dtype=int)
+    return replace(
+        traj,
+        positions=traj.positions[idx],
+        velocities=traj.velocities[idx],
+        accelerations=traj.accelerations[idx],
+        times=traj.times[idx]
+    )
+
+
+def generate_dataset(configs, out_dir, duration=20.0, dt=0.01, n_keep=200, n_baseline=100, softening=0.002):
+    """Run every config through Leapfrog; save a tagged, resampled HDF5 trajectory each."""
+    
+    os.makedirs(out_dir, exist_ok=True)  # creates the output folder if it doesn't exist
+    n_steps = round(duration/dt)  # duration is in nondimensional time units
+    for config in configs:
+        state = build_initial_state(config)
+        traj = run_simulation(state, leapfrog_step, dt=dt, n_steps=n_steps, scenario_name=config.scenario_type, G=1.0, softening=softening)
+        # choose the cadence that fits the scenario
+        if config.scenario_type == "two_body":
+            traj = resample_true_anomaly(traj, n_keep)
+        elif config.scenario_type == "cluster":
+            traj = resample_events(traj, n_baseline)
+        else:
+            raise ValueError(f"unknown scensrio_type: {config.scenario_type}")
+        traj.metadata = {
+            "scenario_type": config.scenario_type,
+            "split": config.split,
+            "seed": config.seed,
+            **config.params,  # spills in every key from params
+        }
+        path = os.path.join(out_dir, f"{config.scenario_type}_{config.seed:05d}.h5")
+        save_trajectory(traj, path)
+
+
+def resample_true_anomaly(traj, n_keep):
+    """Select n_keep snapshots evenely spaced in true anomaly (two-body).
+    Denser near periapsis, at any eccentricity."""
+    rel = traj.positions[:, 0, :] - traj.positions[:, 1, :]  # (T, 3) relative position
+    vel = traj.velocities[:, 0, :] - traj.velocities[:, 1, :]  # (T, 3) relative velocity
+
+    u = rel[0] / np.linalg.norm(rel[0])  # periapsis unit vector (orbit starts here)
+    w = np.cross(rel[0], vel[0])
+    w = w / np.linalg.norm(w)  # orbit normal (constant)
+    p = np.cross(w, u)  # in-plane axis perpendicular to u
+    x = rel @ u  # (T,) component along periapsis, x-axis pinned to peripasis direction
+    y = rel @ p  # (T,) in-plane perpendicular component, y-axis pinned to this directio 
+    theta = np.unwrap(np.arctan2(y, x))  # continuous true anomaly, 0 -> 2pi -> ...
+
+    grid = np.linspace(theta[0], theta[-1], n_keep)
+    idx = np.searchsorted(theta, grid)  # returns the thetas we want, orders them correctly
+    idx = np.clip(idx, 0, len(theta) - 1)  # makes sure the last theta safely maps to the final real timestep
+    
+    return replace(traj, positions=traj.positions[idx], velocities=traj.velocities[idx], accelerations=traj.accelerations[idx], times=traj.times[idx])
+
+
+def resample_events(traj, n_baseline, event_factor=3.0):
+    """Cluster cadence: a course uniform baseline PLUS every snapshot where the two closest bodies come within
+    event_factor * softening of each other. Close encounters are where accelerations are largest, so we sample them densely."""
+
+    pos = traj.positions  # (T, N, 3): every body's position at every timestep    
+    disp = pos[:, :, None, :] - pos[:, None, :, :]  # build seperation distances
+    dist =  np.linalg.norm(disp, axis=3)  # the length of each pair's seperation
+
+    # need to set the diagonal [t, i, i] to infinity so it is never mistaken as the closest pair, as distance would be 0
+    self_idx = np.arange(pos.shape[1])  # indexes the diagonal (0,0), (1,1), ... at every timestep
+    dist[:, self_idx, self_idx] = np.inf
+
+    min_sep = dist.min(axis=(1, 2))  # (T,): distance between the 2 closest bodies, per timestep
+
+    baseline_idx = np.linspace(0, len(min_sep) - 1, n_baseline, dtype=int)
+    threshold = event_factor * traj.softening  # threshold scales with the run's epilson
+    event_idx = np.nonzero(min_sep < threshold)[0]  # indices where the < condition is true
+
+    # merge the 2 index sets while removing duplicates and sorting them in chronological order
+    idx = np.union1d(baseline_idx, event_idx)
+
+    return replace(traj, positions=traj.positions[idx], velocities=traj.velocities[idx], accelerations=traj.accelerations[idx], times=traj.times[idx])
+
+
+def validate_dataset(directory, energy_tol=1e-2, param_rtol=0.05):
+    """Sanity-check a generated dataset. Returns a list of human_readable problem
+    strings - an empty list means every file passed."""
+    issues = []
+    for path in sorted(glob.glob(os.path.join(directory, "*.h5"))):
+        with h5py.File(path,"r") as f:
+            positions = f["positions"][:]  # [:] copies the dataset into a NumPy array
+            velocities = f["velocities"][:]
+            masses = f["masses"][:]
+            G = f.attrs["G"]
+            softening = f.attrs["epsilon"]
+            tags = {k:f.attrs[k] for k in f.attrs}  # all metadata into a plain Python dict
+        name = os.path.basename(path)  # just the filename, for readable messages
+
+        if not np.all(np.isfinite(positions)):
+            issues.append(f"{name}: non-finite positions (trajectory blew up)")
+            continue  # nothing else is meaningful once it's blown up, so skips the rest of the checks for that file
+
+        # Rebuild the state at each saved snapshot and evaluate total energy
+        E = np.array([
+            total_energy(SystemState(masses, positions[t], velocities[t]),
+                         G=G, softening=softening)
+            for t in range(len(positions))
+        ])
+        drift = np.max(np.abs((E - E[0]) / E[0]))
+        if drift > energy_tol:
+            issues.append(f"{name}: energy drift {drift:.2e} exceeds {energy_tol:0e}")
+
+        # check parameters landed where sweep intended
+        if tags["scenario_type"] == "cluster":
+            if len(masses) != tags["N"]:
+                issues.append(f"{name}: N={len(masses)} but tagged {tags['N']}")
+            # Re measure Q from the first snapshot (unsoftened, exactly at generation)
+            v0 = velocities[0]
+            T = 0.5 * np.sum(masses * np.sum(v0**2, axis=1))
+            U = total_energy(SystemState(masses, positions[0], v0), G=G) - T
+            Q_measured =  2 * T / abs(U)
+            if not np.isclose(Q_measured, tags["Q"], rtol=param_rtol):
+                issues.append(f"{name}: Q={Q_measured:.3f} but tagged {tags['Q']:.3f}")
+
+        # mass ratio (both scenarios): heaviest / lightest should equal the tag.
+        ratio_measured = masses.max() / masses.min()
+        if not np.isclose(ratio_measured, tags["mass_ratio"], rtol=param_rtol):
+            issues.append(f"{name}: mass_ratio={ratio_measured:.3f} but tagged {tags['mass_ratio']}")
+
+    return issues
+
+
+    
+
+
