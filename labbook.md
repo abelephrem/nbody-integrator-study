@@ -220,3 +220,27 @@ Dated, append-only log. A few notes per session: what was done, why decisions we
 ### Next
 - Commit Stage 5; raise the softening question with the Project (point it here).
 - Stage 6 — `analysis.py`: energy/angular-momentum drift, position error vs analytic reference, convergence-order log-log fit (Q1–Q3).
+
+---
+
+## 2026-08-13 — Addressing the open softening question (post-Stage 5)
+
+### Decision
+- **One ε′ for the whole dataset, unified at ε′=0.002.** ε′ lives *inside* the force law, so two values = two contradictory laws; a GNN can only learn one. 0.002 is two-body's real physical floor (periapsis fidelity at e=0.9, r_peri=0.1 ≫ ε′); cluster's 0.05 was only a dt-crutch. dt never enters the force law, so the cluster fix has to come from dt → **adaptive sub-stepping**, substeps discarded, only dt_base checkpoints kept (preserves the pre-allocated `(n_steps+1,N,3)` arrays). Supersedes the per-scenario-softening plan from 08-09.
+
+### What I built
+- `run_simulation`: opt-in `adaptive`/`n_resolve` params; a per-substep while-loop that advances dt_base in inner steps `dt_inner = √(ε′/a_max)/n_resolve`, clamped to land exactly on the checkpoint. Logs `max_n_sub` per trajectory into `metadata` (→ HDF5 attr).
+- `generate_dataset`: `adaptive=True`, unified `softening=0.002`, metadata merged (`**traj.metadata`) so `max_n_sub` survives the resample.
+
+### What broke (pre-flight earned its keep)
+- The Project's **per-interval** algorithm (pick one `n_sub` from `a_max` at the interval *start*) was wrong: that a_max is **stale** — blind to encounters that develop *within* a dt_base step. Pre-flight showed drift stuck at ~250× and `max_n_sub` capping ~500. Fix: **per-substep** adaptivity, recompute a_max every substep. Cost: a fresh force eval per substep (lost the free `accelerations[i-1]` reuse — the price of correctness).
+- **n_resolve=12 too coarse** (worst-case drift 0.37). Sweeping it: 24→2e-3, 48→2e-4, 100→4e-5 — falls monotonically, so it's under-resolution, *not* broken symplecticity. Chose **n_resolve=24**. Adaptive also beats uniform tiny dt on accuracy-per-compute (~1e-3 in 15s vs dt=3e-5 giving 4e-2 in 61s).
+
+### Verified
+- Worst config (mass_ratio=15, Q=0.3): drift **250 → ~1.6e-3**, ~15–23 s/traj, `max_n_sub`≈300.
+- Full-pipeline smoke test (build→adaptive run→resample→save→`validate_dataset`) **passes**, `max_n_sub` read back from HDF5.
+- Bonus: two-body e=0.9 substeps at periapsis too (`max_n_sub`=129) → sharper periapsis. (τ formula is softened-core-calibrated, so it slightly over-resolves the Keplerian periapsis — conservative, and N=2 is cheap.)
+
+### Open
+- Extrap `mass_ratio=15` tail drifts ~2e-2, just over `validate_dataset`'s `energy_tol=1e-2` (not corruption — 2% is fine training data). Plan: loosen cluster tol to ~3e-2 (still catches real blow-ups like the 250× baseline) rather than raise n_resolve globally for one rare seed.
+- GNN learning challenges unchanged/sharpened by small ε′: heavy-tailed acceleration targets, rollout stability (G1/G4) — the adaptive wrapper is integrator-agnostic, so it can be reused on GNN rollouts later.

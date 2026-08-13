@@ -32,6 +32,8 @@ def run_simulation(
         G=1.0,
         softening=0.0,
         save_every_k=1,  # keep the knob, defaults to 1
+        adaptive=False,  # opt-in: off by default so softening=0 callers are untouched
+        n_resolve=24,  # steps to place across each close-encounter crossing time
 ):
     """Step the system forward n_steps and record the full trajectory.
     
@@ -52,9 +54,27 @@ def run_simulation(
     velocities[0] = initial_state.velocities
     accelerations[0] = forces_func(initial_state)
     times[0] = 0.0
+    max_n_sub = 1  # largest substep count any interval needed - the deepest-encounter diagnostic
 
     for i in range(1, n_steps + 1):
-        state = integrator(state, forces_func, dt)
+        t_elapsed = 0.0  # time covered so far within this dt_base interval
+        n_sub = 0  # substeps taken this interval (for the diagnostic)
+
+        while dt - t_elapsed > 1e-12:  # keep substepping until the full dt_base is covered
+            if adaptive and softening > 0:
+                # live a_max: re-sampled every substep so dt_inner tracks the plunge as it deepens
+                a_max = np.max(np.linalg.norm(forces_func(state), axis=1))
+                dt_inner = np.sqrt(softening / a_max) / n_resolve if a_max > 0 else dt
+            else:
+                dt_inner = dt  # non-adaptive (or softening=0): one full step, substepping off
+            
+            dt_inner = min(dt_inner, dt - t_elapsed)  # clamp so the last substep lands exactly on the checkpoint
+            state = integrator(state, forces_func, dt_inner)  # substeps discarded, only the checkpoint is kept
+            t_elapsed += dt_inner
+            n_sub +=1
+
+        max_n_sub = max(max_n_sub, n_sub)        
+        
         positions[i] = state.positions
         velocities[i] = state.velocities
         accelerations[i] = forces_func(state)
@@ -73,6 +93,7 @@ def run_simulation(
         scenario=scenario_name,
         N_bodies=N,
         N_steps=n_steps,
+        metadata={"max_n_sub": max_n_sub}
     )
 
 
