@@ -244,3 +244,31 @@ Dated, append-only log. A few notes per session: what was done, why decisions we
 ### Open
 - Extrap `mass_ratio=15` tail drifts ~2e-2, just over `validate_dataset`'s `energy_tol=1e-2` (not corruption — 2% is fine training data). Plan: loosen cluster tol to ~3e-2 (still catches real blow-ups like the 250× baseline) rather than raise n_resolve globally for one rare seed.
 - GNN learning challenges unchanged/sharpened by small ε′: heavy-tailed acceleration targets, rollout stability (G1/G4) — the adaptive wrapper is integrator-agnostic, so it can be reused on GNN rollouts later.
+
+---
+
+## 2026-08-16 — Stage 6: Analysis & metrics (`analysis.py`)
+
+### Built
+- `energy_drift` / `angular_momentum_drift` — relative-drift series; L drift is the norm of the *vector* difference (rotating L still registers).
+- `angular_momentum` — now in the COM frame.
+- `kepler_solve` — vectorised Newton–Raphson for Kepler's equation.
+- `two_body_reference` — exact unsoftened orbit r_rel(t); `position_error` vs it.
+- `run_convergence_sweep` + `convergence_order` — log-log slope = measured order.
+- `tests/test_analysis.py` — 9 tests, all passing.
+
+### Decisions
+- `energy_drift` reads `traj.softening` — wrong ε manufactures fake drift.
+- Convergence sweep runs its own clean sims (softening=0, adaptive off): the Kepler reference is unsoftened, so any ε floors the error and reads a fake-low order. `assert max_n_sub == 1` guards effective step == h.
+- COM subtraction removes a silent precondition (no numerical change on our zero-momentum ICs).
+
+### Validation
+- Energy bounded `<1e-4` on a circular Leapfrog orbit; L conserved `<1e-10`.
+- `kepler_solve` by round-trip; `two_body_reference` at peri/apoapsis.
+- Orders within ±0.3 of theory: Euler≈1, Leapfrog≈2, RK4≈4 → **Q1 confirmed**; Q2/Q3 now computable.
+
+### Broke
+- Two transcription typos caught in review: misplaced paren in `energy_drift`; `positions(t)` instead of `positions[t]`.
+
+### Next
+- Stage 7 — visualization (trajectory, energy-drift log plots, convergence log-log with fitted slope).
