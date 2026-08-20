@@ -272,3 +272,38 @@ Dated, append-only log. A few notes per session: what was done, why decisions we
 
 ### Next
 - Stage 7 — visualization (trajectory, energy-drift log plots, convergence log-log with fitted slope).
+
+---
+
+## 2026-08-20 — Stage 7: Visualisation (`visualisation.py`)
+
+### Built
+- New module `visualisation.py` — 5 figures, each a data function + a plot function:
+  - **Energy drift** (`energy_drift_series` / `plot_energy_drift`) — |ΔE/E₀| vs orbits.
+  - **Convergence** (`convergence_series` / `fit_region` / `plot_convergence`) — log-log error vs h, fitted order p annotated.
+  - **Phase-space** (`phase_space_series` / `plot_phase_space`) — radial plane (r, v_r), eccentric orbit.
+  - **3D cluster** (`cluster_trajectory` / `plot_cluster_3d`) — rotatable Plotly HTML.
+  - **Animation** (`animation_series` / `animate_integrators`) — side-by-side Euler/Leapfrog/RK4 .mp4.
+- Helpers: `circular_period` (K3), `INTEGRATORS` table (name→step fn).
+
+### Decisions
+- **Diagnostics run fresh fixed-dt in-memory sims, NOT the HDF5 dataset.** The dataset is softened + adaptive + Leapfrog-only + resampled (true-anomaly/event) + short (20 units) — every one of those is wrong for measuring *integrator* behaviour. Only the 3D cluster scene uses the dataset regime (softening+adaptive ON), because there the goal is to *show* a real chaotic trajectory, not diagnose a method.
+- **Energy drift:** split panels — Euler/RK4 on log-y (|drift|), Leapfrog on linear-y (signed) + inset zoom. Leapfrog's drift oscillates *through zero*, so log(|·|) spikes to −∞ at every crossing → spurious downward artefact. Linear axis shows the bounded oscillation honestly.
+- **Convergence:** `fit_region` trims BOTH ends — large-h (not-yet-asymptotic, e.g. Euler) *and* small-h (round-off floor, e.g. RK4) — via longest-contiguous-run of local slopes near the median. Fit line drawn only over the fitted region (never through excluded points).
+- **3D cluster:** cold collapse Q=0.5 (sub-virial → dramatic close encounters). Picked `seed=5` after a numeric probe (rmax/r95 ratio ≈ 1.0 = compact, no ejection stretching the axes). One colour per body, shared by its line and end marker (Plotly assigns per-*trace*, and the markers are separate traces, so without explicit colour the dots don't match their paths).
+- **Animation:** precompute-once rule — `update(frame)` only reads `positions[frame]`, never steps an integrator. Frame `stride` thins 1801 sim frames → 600 for a sane video. Same code does live `plt.show()` (no ffmpeg) or saved `.mp4` (needs ffmpeg).
+
+### Results
+- **Q1 reconfirmed** from the plot: measured p = Euler 0.93, Leapfrog 2.00, RK4 4.20.
+- **Q2/Q4 visualised three ways:** Euler drifts/spirals out, Leapfrog bounded/closed loop, RK4 slow secular drift. RK4 crosses Leapfrog's energy bound at ~15 orbits (more accurate per step, not conservative).
+
+### Environment
+- Installed **plotly 6.9.0** (+ narwhals) and **ffmpeg 9.0** (`winget install Gyan.FFmpeg`). Added plotly/narwhals to `requirements.txt`; noted ffmpeg as a system (non-pip) dep.
+
+### Broke
+- Transcription bugs caught in review/runs: phase-space `r_rel` built from `velocities` not `positions`; `v_r` used `norm(v·r)` (always ≥0) instead of the signed dot `sum(v·r)`; animation `return updated` indented *inside* the `for name` loop → only Euler animated; `figsize(12,5)` missing `=`; `Q=0.5` hardcoded instead of `Q=Q`; plot called with the function object, not `func()`.
+- **ffmpeg PATH gotcha (Windows/VS Code):** winget updates the registry PATH, but VS Code terminal *tabs* inherit the PATH from when VS Code launched — a new tab is not enough, needs a full VS Code restart. First `.mp4` was truncated (`moov atom not found`) because matplotlib silently fell back to the Pillow writer when ffmpeg wasn't found. Fixed after restart → valid 20 s H.264.
+
+### Next
+- Optional: pytest guard asserting fitted orders stay ≈ 1/2/4.
+- Stage 8, then GNN stages A–C.

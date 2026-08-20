@@ -238,7 +238,7 @@ def cluster_configs(n_draws=10, seed0=1000):
 
 
 def random_orientation(state, seed=None):
-    """Roatate positions and velocities by a uniformly-random 3D rotation.
+    """Rotate positions and velocities by a uniformly-random 3D rotation.
     Gravity is rotation-invariant, so the physics is unchanged - this only varies 
     the orbital plane's orientation."""
     rng = np.random.default_rng(seed)
