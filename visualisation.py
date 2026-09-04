@@ -5,16 +5,11 @@ import plotly.graph_objects as go
 import plotly.colors 
 from matplotlib.animation import FuncAnimation
 
-from scenarios import two_body_circular, two_body_eccentric, chaotic_cluster, nondimensionalise
+from scenarios import circular_period, two_body_circular, two_body_eccentric, chaotic_cluster, nondimensionalise
 from simulation import run_simulation
-from analysis import energy_drift, run_convergence_sweep, convergence_order
+from analysis import energy_drift, run_convergence_sweep, convergence_order, fit_region
 from integrators import euler_step, leapfrog_step, rk4_step
 INTEGRATORS = [("Euler", euler_step), ("Leapfrog", leapfrog_step), ("RK4", rk4_step)]
-
-
-def circular_period(m1=1.0, m2=1.0,r=1.0, G=1.0):
-    """Period of the circular two-body orbit (K3)"""
-    return 2 * np.pi * np.sqrt(r**3 / (G * (m1 + m2)))
 
 
 def energy_drift_series(n_periods=200, steps_per_period=400):
@@ -82,24 +77,6 @@ def convergence_series(step_sizes, e=0.0, t_final=None):
             state, step, step_sizes, t_final=t_final, a=a, e=e, G=1.0,
         )
     return series
-
-
-def fit_region(step_sizes, errors, tol=0.3):
-    """Indicies of the straight middle of the log-log curve (integrator-dominated).
-    Trims both ends: large-h(not-yet-assympototic) and small-h (round-off floor)."""
-    logh = np.log10(step_sizes)
-    loge = np.log10(errors)
-    local = np.diff(loge) / np.diff(logh)  # slope between each adjacent pair
-    med = np.median(local)  # robust estimate of the true order p, ignores the outliers
-    clean = np.abs(local - med) < tol * abs(med)  # whch local slopes sit near the median
-
-    # longest contiguous run of clean slops -> the straight region
-    padded = np.concatenate(([False], clean, [False]))
-    diffs = np.diff(padded.astype(int))  # +1 where a run starts, -1 where it ends
-    starts = np.where(diffs == 1)[0]  # run start indices
-    ends = np.where(diffs == -1)[0]  # run end indices (exclusive)
-    k = np.argmax(ends - starts)  # the longest run
-    return np.arange(starts[k], ends[k] + 1)  # +1: n slopes span n+1 points
 
 
 def plot_convergence(step_sizes, series, out_path="figures/convergence.png"):

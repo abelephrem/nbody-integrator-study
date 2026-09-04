@@ -1,0 +1,5 @@
+scenario,quantity,sign,single_signed,n_crossings,monotone_frac,min,max,final,first_crossing_t
+circular,dE/E0,-,True,0,1.0,-5.007493064645986e-08,0.0,-5.007493064645986e-08,
+circular,dL/L0,-,True,0,1.0,-2.503746416250397e-08,0.0,-2.503746416250397e-08,
+eccentric,dE/E0,-,True,0,0.505975,-8.752410903811733e-06,0.0,-8.697523919742874e-06,
+eccentric,dL/L0,-,True,0,1.0,-1.345633238522875e-06,0.0,-1.345633238522875e-06,

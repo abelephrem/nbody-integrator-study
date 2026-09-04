@@ -2,6 +2,15 @@
 
 import numpy as np
 
+_force_eval_count = 0  # how many times compute_accelerations has run
+
+def reset_force_count():
+    global _force_eval_count
+    _force_eval_count = 0
+
+def get_force_count():
+    return _force_eval_count
+
 
 def compute_accelerations(state, G=1.0, softening=0.0):
     """Computes grav acceleration on every body from every other body.
@@ -9,7 +18,9 @@ def compute_accelerations(state, G=1.0, softening=0.0):
     Softening (ε) keeps the acceleration finite when two bodies are very close, adds ε² to the squared distance. 
     
     Returns an (N, 3) array, row i is the acceleration vector on body i"""
-    
+    global _force_eval_count
+    _force_eval_count += 1
+
     positions = state.positions  # (N, 3)
     masses = state.masses  # (N,)
     disp = positions[None, :, :] - positions[:, None, :]  # (N, N, 3), disp[i,j] = r_j - r_i

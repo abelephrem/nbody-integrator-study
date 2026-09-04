@@ -32,6 +32,10 @@ RATIO_BASELINE = 1  # simplest mass case
 N_BASELINE = 5  # mid-range trained value
 Q_BASELINE = 1.3  # mid-range trained value
 
+def circular_period(m1=1.0, m2=1.0,r=1.0, G=1.0):
+    """Period of the circular two-body orbit (K3)"""
+    return 2 * np.pi * np.sqrt(r**3 / (G * (m1 + m2)))
+
 
 def _kepler_two_body(m1, m2, a, e, G=1.0):
     """Two-body orbit built at periapsis (v_r=0), returned in the COM frame.

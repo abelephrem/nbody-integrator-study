@@ -1,7 +1,7 @@
 import numpy as np
 from bodies import Body, bodies_to_state
 from integrators import leapfrog_step
-from simulation import run_simulation, save_trajectory
+from simulation import run_simulation, save_trajectory, load_trajectory
 import h5py
 
 
@@ -57,4 +57,24 @@ def test_save_and_reload(tmp_path):
         assert f.attrs["integrator"] == "leapfrog"  # proves stripping worked
         assert f.attrs["N_steps"] == 10
         assert f.attrs["epsilon"] == 0.0  # proves softening --> epsilon name mapping worked
+
+
+def test_load_trajectory_round_trip(tmp_path):
+    state = make_circular_orbit()
+    traj = run_simulation(state, leapfrog_step, dt=0.01, n_steps=10, 
+                          scenario_name="two_body", G=1, softening=0.02)
+    traj.metadata = {**traj.metadata, "split": "train", "seed": 42}
+
+    path = tmp_path / "roundtrip.h5"
+    save_trajectory(traj, path)
+    loaded = load_trajectory(path)
+
+    assert np.array_equal(loaded.positions, traj.positions)
+    assert np.array_equal(loaded.velocities, traj.velocities)
+    assert np.array_equal(loaded.accelerations, traj.accelerations)
+    assert np.array_equal(loaded.times, traj.times)
+
+    assert loaded.softening == 0.02
+    assert set(loaded.metadata) == set(traj.metadata)
+
 

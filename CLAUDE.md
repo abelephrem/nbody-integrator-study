@@ -29,7 +29,10 @@ Q2: Do symplectic integrators bound energy error while non-symplectic ones drift
 Q3: Angular momentum conservation across integrators?
 Q4: Accuracy-order vs long-term correctness trade-off (RK4 vs Leapfrog head-to-head)?
 Q5–Q6: Softening sensitivity, chaos signatures (optional stretch goals).
-— Leapfrog confirmed by Q2 + Q4 as ground-truth generator for GNN training data —
+— Leapfrog confirmed by Q2 + Q3 + Q4 as ground-truth generator for GNN
+  training data; argument is bounded/unbiased error, not smaller error.
+  RK4's energy error is smaller on the eccentric case — do not claim
+  otherwise. See PROJECT_PLAN.md Part 1 bridge. —
 G1: Does the GNN learn to predict per-particle accelerations accurately?
 G2: How does rollout trajectory error grow over time vs Leapfrog ground truth?
 G3: Does the GNN rollout conserve energy and angular momentum comparably to Leapfrog?

@@ -4,7 +4,7 @@ from simulation import run_simulation
 from integrators import euler_step, leapfrog_step, rk4_step
 from analysis import (total_energy, angular_momentum, energy_drift,
                       angular_momentum_drift, kepler_solve, two_body_reference,
-                      position_error, run_convergence_sweep, convergence_order)
+                      position_error, run_convergence_sweep, convergence_order, fit_region, angular_momentum_signed_drift, drift_growth_exponent)
 from bodies import SystemState
 
 
@@ -46,6 +46,19 @@ def test_angular_momentum_boost_invariant():
                           state.positions + np.array([5.0, -2.0, 1.0]),
                           state.velocities + np.array([3.0, 1.0, -4.0]))
     assert np.allclose(L, angular_momentum(boosted))
+
+
+def test_signed_L_drift_agrees_with_the_unsigned_one():
+    """On a planar orbit L stays parallel to L0, so the norm and the projection
+    can only differ by sign - and RK4's sign should be negative (losing L)."""
+    traj = run_simulation(two_body_circular(), rk4_step, dt=0.01, n_steps=2000,
+                          scenario_name="circular", G=1.0, softening=0.0)
+    signed = angular_momentum_signed_drift(traj)
+    unsigned = angular_momentum_drift(traj)
+
+    assert np.allclose(np.abs(signed), unsigned, rtol=1e-6)
+    assert signed[-1] < 0
+
 
 
 def test_kepler_solve_roundtrip():
@@ -94,3 +107,44 @@ def test_convergence_orders():
         p, c = convergence_order(step_sizes, errors)
         assert abs(p - p_theory) < 0.3, f"{integrator.__name__}: p={p:.2f}, expected {p_theory}"
 
+
+def test_fit_region_recovers_slope_despite_contaminated_ends():
+    """fit_region must drop both the saturated large-h head and the round-off
+    small-h floor, leaving only the straight middle so the true order is recovered."""
+    h = np.geomspace(1e-1, 1e-5, 12)      # large -> small, like the real sweep
+    err = h**2                            # a clean order-2 power law
+    err = np.maximum(err, 1e-9)           # small-h tail clamped to a round-off floor
+    err[:2] = [0.5, 0.4]                  # large-h head saturated (not-yet-asymptotic)
+
+    region = fit_region(h, err)
+    p, _ = convergence_order(h, err, fit_slice=region)
+    assert abs(p - 2.0) < 0.1                     # slope recovered from the clean middle
+    assert 0 not in region and 1 not in region    # saturated head was dropped
+
+
+def test_fit_region_keeps_all_when_clean():
+    """A pure power law with no contamination: nothing to trim, keep every point."""
+    h = np.geomspace(1e-1, 1e-4, 8)
+    region = fit_region(h, h**2)
+    assert len(region) == len(h)
+
+
+def test_drift_growth_exponent_recovers_linear_growth():
+    """A drift growing linearly in t must give q = 1."""
+    t = np.linspace(0, 100, 1000)
+    drift = 1e-6 * t
+    q, n, saturated = drift_growth_exponent(t, drift)
+
+    assert np.isclose(q, 1.0, atol=1e-6)
+    assert not saturated          # peaks at 1e-4, never reaches the 1% threshold
+
+
+def test_drift_growth_exponent_flags_saturation():
+    """A run that blows past the threshold is fitted only on its early part."""
+    t = np.linspace(0, 100, 1000)
+    drift = 1e-3 * t              # crosses 1% at t = 10, a tenth of the way in
+    q, n, saturated = drift_growth_exponent(t, drift)
+
+    assert saturated
+    assert n < len(t)             # the saturated tail was excluded
+    assert np.isclose(q, 1.0, atol=1e-6)   # slope still linear where it was fitted

@@ -2,7 +2,8 @@
 
 from dataclasses import dataclass, field  # for the trajectory bundle
 import numpy as np  # allocating/filling the history arrays
-from forces import compute_accelerations  # to build forces_func inside run_simulation
+from forces import compute_accelerations, reset_force_count, get_force_count  # to build forces_func inside run_simulation
+from time import perf_counter  
 import h5py
 
 
@@ -31,7 +32,6 @@ def run_simulation(
         scenario_name,
         G=1.0,
         softening=0.0,
-        save_every_k=1,  # keep the knob, defaults to 1
         adaptive=False,  # opt-in: off by default so softening=0 callers are untouched
         n_resolve=24,  # steps to place across each close-encounter crossing time
 ):
@@ -47,6 +47,8 @@ def run_simulation(
     velocities = np.zeros((n_steps + 1, N, 3))
     accelerations = np.zeros((n_steps + 1, N, 3))
     times = np.zeros((n_steps + 1,))
+    reset_force_count()
+    loop_time = 0.0
     integrator_name = integrator.__name__.replace("_step", "")
 
     state = initial_state
@@ -60,6 +62,7 @@ def run_simulation(
         t_elapsed = 0.0  # time covered so far within this dt_base interval
         n_sub = 0  # substeps taken this interval (for the diagnostic)
 
+        t0 = perf_counter()
         while dt - t_elapsed > 1e-12:  # keep substepping until the full dt_base is covered
             if adaptive and softening > 0:
                 # live a_max: re-sampled every substep so dt_inner tracks the plunge as it deepens
@@ -73,12 +76,14 @@ def run_simulation(
             t_elapsed += dt_inner
             n_sub +=1
 
-        max_n_sub = max(max_n_sub, n_sub)        
+        max_n_sub = max(max_n_sub, n_sub)      
+        loop_time += perf_counter() - t0  
         
         positions[i] = state.positions
         velocities[i] = state.velocities
         accelerations[i] = forces_func(state)
         times[i] = i * dt
+    force_evals = get_force_count() - (n_steps + 1)
 
     return Trajectory(
         positions=positions,
@@ -93,7 +98,9 @@ def run_simulation(
         scenario=scenario_name,
         N_bodies=N,
         N_steps=n_steps,
-        metadata={"max_n_sub": max_n_sub}
+        metadata={"max_n_sub": max_n_sub,
+                  "force_evals": force_evals,
+                  "loop_time": loop_time}
     )
 
 
@@ -115,3 +122,46 @@ def save_trajectory(traj, path):
         f.create_dataset("accelerations", data=traj.accelerations, chunks=True, compression="gzip")
         f.create_dataset("masses", data=traj.masses)
         f.create_dataset("times", data=traj.times)
+
+
+# HDF5 attr name -> Trajectory field name. It names the fields to pull out,
+# and by exclusion marks everything else as metadata.
+_ATTR_TO_FIELD = {
+    "G": "G",
+    "epsilon": "softening",
+    "dt": "dt",
+    "integrator": "integrator",
+    "scenario": "scenario",
+    "N_bodies": "N_bodies",
+    "N_steps": "N_steps",
+}
+
+
+def load_trajectory(path):
+    """Read an HDF5 file written by 'save_trajectory' back into a Trajectory."""
+    with h5py.File(path, "r") as f:
+        positions = f["positions"][:]
+        velocities = f["velocities"][:]
+        accelerations = f["accelerations"][:]
+        masses = f["masses"][:]
+        times = f["times"][:]
+
+        fields = {}
+        for attr_name, field_name in _ATTR_TO_FIELD.items():
+            fields[field_name] = f.attrs[attr_name]   
+
+        metadata = {}
+        for key in f.attrs:
+            if key in _ATTR_TO_FIELD:
+                continue
+            metadata[key] = f.attrs[key]
+
+    return Trajectory(
+        positions=positions,
+        velocities=velocities,
+        accelerations=accelerations,
+        masses=masses,
+        times=times,
+        metadata=metadata,
+        **fields,
+    )

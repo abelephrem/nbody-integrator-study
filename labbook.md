@@ -307,3 +307,201 @@ Dated, append-only log. A few notes per session: what was done, why decisions we
 ### Next
 - Optional: pytest guard asserting fitted orders stay ≈ 1/2/4.
 - Stage 8, then GNN stages A–C.
+
+## 2026-09-04 — Stage 8 results interpretation (Claude.ai Project session)
+
+No code written. Resolved the unexplained energy-drift scaling from Stage 8:
+Leapfrog gave h⁴ on circular / h² on eccentric, RK4 gave h⁵ on both, against
+an expectation of h² and h⁴ throughout.
+
+### Leapfrog — hypothesis confirmed
+Backward error analysis: the numerical trajectory is the exact solution of a
+"shadow" system whose energy is conserved exactly. So measured energy =
+shadow energy − h²·H₂(state), i.e. ΔE is a *difference of a state function*,
+not an accumulation. That is the mechanism behind q = 0.02 — no drift term
+exists in the structure, rather than merely a small one.
+
+H₂ = α|F|² + β(v·dF/dt), and both pieces depend only on r, ṙ and angular
+speed. A circular orbit is a rotation, so H₂ is constant along it and cancels
+in the difference. Note the correct framing: not "the state is invariant"
+(the bodies move, dF/dt ≠ 0) but "H₂ is rotationally invariant so it cannot
+see orientation."
+
+Velocity Verlet is exactly reversible ⇒ only even powers of h in the error
+expansion ⇒ killing h² exposes h⁴, a jump of two orders. Ratios 16.0 and
+4.0 confirm.
+
+### RK4 — hypothesis correctly falsified, different mechanism entirely
+Not reversible, no conserved shadow energy, so none of the above applies.
+
+State = (position, velocity) in phase space; energy ∝ length². One step
+multiplies the state by amplification factor R = truncated series of e^{iθ},
+θ = ωh. Energy multiplier per step = |R|² = 1 − θ⁶/72 + θ⁸/576: the θ² and
+θ⁴ terms cancel identically, because RK4's leading error −iθ⁵/120 is purely
+imaginary — a pure phase error, which rotates the state without shortening
+it. Only at θ⁶ does the error acquire a component along the state vector.
+
+Over t/h steps: |ΔE/E₀| ≈ ω⁶h⁵t/72 ⇒ s = 5, q = 1. Scenario-independent
+because it comes from RK4's Butcher coefficients, not the orbit; eccentricity
+changes the prefactor, not the exponent (32.0 vs 31.9).
+
+### Two quantitative confirmations
+- Predicted θ⁶/72 sits a constant factor 2.00 below measurement at 200/400/
+  800 spo. Constant across 4× in h ⇒ scaling exact; the 2 is geometric
+  (two coupled modes vs one oscillator).
+- |ΔE/E| = 2|ΔL/L| for RK4 circular: 5.01e-8 / 2.5e-8 = 2.00, the Kepler
+  prediction for a slow inward spiral at fixed shape. Two independently
+  computed quantities hitting the predicted ratio ⇒ the spiral is literal.
+  Also explains RK4's h⁵ scaling in L.
+
+### Notation for the write-up
+Three exponents, all simultaneously correct; name them separately or the
+results read as self-contradictory.
+  p — position error vs h   (convergence order)  LF 2.00, RK4 4.37
+  q — max|ΔE/E₀| vs t       (growth in time)     LF 0.02, RK4 1.00
+  s — max|ΔE/E₀| vs h       (amplitude scaling)  LF 4 / 2, RK4 5
+
+### Plan amendments
+Part 1 bridge rewritten, CLAUDE.md one-liner updated. The old "RK4 would
+teach corrupted physics" claim was wrong — accelerations are stored exactly,
+so G1 labels are correct regardless of integrator; the integrator determines
+which *states* get visited. Real argument: directional bias in the training
+distribution (RK4's orbits all systematically contracting), validity of the
+reference for G2/G3, exact L conservation, cost. Now explicitly recorded that
+RK4's energy error is *smaller* on the eccentric case at equal step size and
+at equal cost — Leapfrog wins on error character, not magnitude.
+
+### Outstanding
+Two diagnostic runs queued (see Stage 8 addendum prompt); neither blocks
+Stage 9. Also flagged for Stage 9: plot |ΔE/E₀| and 2|ΔL/L₀| on shared axes
+for RK4 circular — they should coincide across all 300 orbits.
+
+---
+
+## 2026-09-04 — Stage 8: experiment suite (build, results, extra checks, dataset)
+
+Suite was built across earlier sessions and never written up; this covers it retrospectively
+(reconstructed from code, results and session transcripts), plus two further diagnostic runs,
+closure work and the training dataset.
+
+### Built — `experiments.py`
+- Generate/reduce split: generate → HDF5 in `C:/nbody_raw/<set>/` (outside the repo — it's a
+  OneDrive folder), reduce → tables in `results/`. `run_path` built first so 55 files couldn't
+  end up inconsistently named.
+- **Set A** (Q1): circular, 3 integrators × 15 h over `geomspace(1e-1, 1e-4)`, 5 orbits,
+  resampled to 200 — Q1 only reads `t_final`, which drops Set A from ~150 MB to nothing.
+- **Sets B/C** (Q2–Q4): B = both scenarios × 3 integrators @ 400 spo; C = (LF, RK4) @ 200 and
+  800. All 300 orbits, unresampled.
+- From the handoff spec: Euler is out of Set C because the crossover is an LF-vs-RK4 question;
+  200/400/800 is ×4 in h → ×16 in crossover time; predicted crossovers of ~4/15/60 orbits are
+  why the runs are 300 orbits.
+- **Set C was specified circular-only.** The eccentric half was added mid-build as an
+  extension — and it's what produced LF s=2 eccentric vs s=4 circular, the anomaly the whole
+  interpretation session exists to explain.
+
+### Results — Q1 to Q4
+- **Q1** p = Euler 0.89 / LF 2.00 / RK4 4.37. Euler fits 6/15 (large-h error is O(1) — no
+  order left to measure), RK4 11/15 (four smallest h are round-off floor).
+- **Q2** `growth_ratio` (2nd-half max / 1st-half max) gives LF 1.00, RK4 2.00 (= linear in t)
+  — **but reads Euler backwards** (1.06 ≈ "bounded"), because Euler saturates at O(1) error
+  and has nowhere left to grow. Fix is a *window*, not a new ratio: fit the log-log slope of
+  the running-max envelope over the part below 1% drift. That exponent is **q** — LF 0.017,
+  RK4 1.000, Euler 0.999 (saturated flag; 20 points, to orbit 0.05). Threshold sensitivity:
+  1e-2 → 0.999, 5e-2 → 0.992, 1e-1 → 0.962, 3e-1 → 0.791.
+- **Q3** LF conserves L to machine precision, 2.5e-14 / 6.0e-14 — exactly, not approximately.
+  RK4 2.5e-8 / 1.3e-6, Euler 1.37 / 0.58. Expectation had been round-off level for all three;
+  wrong — central forces conserve L in the *continuous* equations only.
+- **Q4** At equal h on eccentric, RK4's energy error is *smaller* (8.8e-6 vs 6.7e-4) at twice
+  the cost, but bounded-vs-growing means RK4 crosses LF eventually. Character, not magnitude.
+
+### q existed only in a chat log
+The 1%-threshold fix was agreed in an earlier session but never implemented — `main()`
+regenerated every Stage 8 result *except* the agreed Q2 answer. Now
+`analysis.drift_growth_exponent`, with `q` / `q_n_points` / `saturated` columns.
+`growth_ratio` kept: valid whenever the run hasn't saturated.
+
+Two eccentric values that had never been measured:
+- **Euler → `nan`** — starts at periapsis, passes 1% within one step, one usable point.
+- **RK4 → 0.84–0.90, not 1.00**, ordered by step size (0.934 / 0.896 / 0.840 at 200/400/800).
+  Fitting artefact: the envelope is `A + B·t` and the early flat `A` drags the slope down.
+  Refitting over t > 50 orbits gives 0.991 / 0.982 / 0.964. Smaller h keeps the ripple
+  dominant for more orbits, so more plateau — the same h·t crossover Set D found in *s*,
+  appearing independently in *q*. `q` left as defined; a per-scenario window would be prettier
+  and less honest.
+
+### Set D — RK4 energy scaling at 5 orbits
+Eccentric e=0.5, RK4 only, 10 h over Set A's window, no resampling (the metric is a max over
+the run). `assert max_n_sub == 1`, ε=0.
+
+**s = 4.52** on 8/10 points. Trimmed: the two smallest h, round-off floor (error rises,
+7.6e-14 → 1.3e-13). Local slopes small→large h: `-0.67 1.58 | 3.97 4.20 4.35 4.53 4.71 4.84 5.05`.
+
+**Neither ≈4 nor ≈5.** Not falsified — h⁴ is there at the small-h end — but s varies with h
+*within a single end time*, which neither candidate describes. Caveat: the leftmost fitted
+point is ~22% round-off and so biased low; quadrature correction gives 4.00, linear gives 4.28,
+and linear would break the monotone trend — so the correction is ~0.03, not ~0.3. First
+floor-free slope is 4.20. `np.longdouble` is float64 under MSVC: no cheap precision check.
+
+### Sign structure of RK4's error — Set B re-analysis, no new simulation
+Set B stores every step and `energy_drift` was already signed. Only L needed new code, since
+`angular_momentum_drift` returns a norm: added `angular_momentum_signed_drift` (projects L
+onto û = L₀/|L₀|).
+
+    scenario    ΔE/E₀  sign/cross/monotone/final      ΔL/L₀  sign/cross/monotone/final
+    circular      − / 0 / 1.0000 / -5.01e-8             − / 0 / 1.0000 / -2.50e-8
+    eccentric     − / 0 / 0.5060 / -8.70e-6             − / 0 / 1.0000 / -1.35e-6
+
+Single-signed negative, **zero crossings anywhere**, ΔE and ΔL sharing a sign; every series'
+max is exactly 0.0, the t=0 point. Circular strictly monotone at both zoom levels. Eccentric
+loss arrives in per-orbit events at integer orbit number = periapsis (inferred from the ICs,
+not measured): **ΔL a clean staircase, ΔE dropping then partly recovering** — that recovery is
+what the 0.506 counts. Circular ΔE/ΔL = 2.0000, reproducing the earlier ratio on signed data;
+eccentric 6.46.
+
+### Closure
+`skip_existing` on the two remaining generators (presence-based — changing `n_orbits` without
+deleting the set silently skips stale files). `reduce_convergence` → `(orders, rows)`.
+**`plot_convergence_set`**, what the `in_fit` column was written for: p = 0.89 / 2.00 / 4.37
+from the stored set, matching the notation block. **`plot_long_runs_scaling`** (B+C, three
+points per line): recovers LF s = 4.00 / 2.00 and RK4 5.00 / 4.99 — the interpretation's
+exponents, refit by code that didn't know them. Euler excluded (one h, and its drift of ~1
+stretches the axis six decades). **`main()` + `__main__` guard**: `python experiments.py`
+regenerates everything — the Stage 8 deliverable line, previously unmet.
+
+### Bridge — dataset generated, NOT clean
+Stage 5 pipeline, Leapfrog-only (already hardcoded): 360 trajectories → `C:/nbody_data/`,
+46.6 min, 21 MB. **`validate_dataset`: 28/260 clusters (10.8%) over the 3e-2 tolerance** —
+~19 between 3e-2 and 1e-1, ~9 severe, worst **1.25** (125%, not physics any more).
+
+Not the predicted `mass_ratio=15` tail. Failure rates: 10/16/20/6/8/20% across ratio
+1/3/5/7/10/15; 5/5/16/8/18/10% across N = 3/4/5/7/8/10; 7/12/**40**% across Q < 0.7 / 1.1–1.5
+/ ≥ 1.5. Plenty are `train` split. `max_n_sub` is the same for passing and failing runs
+(median 222 vs 240) — not "ran out of substeps". Nothing regressed: the Stage 5 smoke test
+covered one config, so this is the first end-to-end validation of the full set.
+
+### Decisions
+- New CSVs rather than appending — neither existing schema fits.
+- Plots of *saved* data live in `experiments.py`; `visualisation.py` keeps its fresh-sim rule.
+- `fit_region` untouched: it trims the floor correctly, but its ±0.3×median (≈±1.4) can't see
+  a 4.2→4.9 bend, so local slopes carry the Set D fit. Retuning risks Q1's published p.
+- `local_slopes` extracted, but `fit_region` keeps its own log10 copy — same maths, but a
+  threshold comparison, so bit-level differences could flip a borderline point.
+- The two reduce functions kept separate; merging would rewrite `convergence.csv`'s schema.
+
+### Broke / gotchas
+- `growth_ratio` reads Euler backwards (above) — only meaningful while unsaturated.
+- Q3 expectation wrong: round-off-level L drift predicted for all three, only LF delivers it.
+- `circular_period()` is 2π√(a³/G(m₁+m₂)) = 4.443, not 2π — cost estimates came out 40% high.
+- t=0 is identically zero in every drift series; a naive sign test calls that a crossing.
+- CSV booleans read back as truthy strings `"True"`/`"False"`, so every point looks fitted —
+  both plot functions take the reduce's return value, not the file.
+
+### Outstanding
+- **Dataset quality**: accept 3–10% drift and address only the ~9 severe runs; or raise
+  `n_resolve` and regenerate the 28 (the driver skips existing files, so minutes); or check
+  whether the severe ones are physical ejections. Next session.
+- 20/50/150-orbit sweeps not run — deferred once s turned out to vary with h within a single
+  end time, which isn't what that map tests.
+- For the Project: (1) does s varying with h at fixed end time fit the θ⁶/72 account, where
+  θ = ωh isn't constant around an eccentric orbit? (2) is quadrature the right model for
+  combining truncation and round-off when the metric is a *max*?

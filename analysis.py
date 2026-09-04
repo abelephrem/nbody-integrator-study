@@ -50,6 +50,24 @@ def angular_momentum_drift(traj):
     L0 = L[0]  # (3,) initial angular momentum vector
     return np.linalg.norm(L - L0, axis=1) / np.linalg.norm(L0)
 
+def angular_momentum_signed_drift(traj):
+    """Signed relative change in L, projected onto the INITIAL L direction.
+
+    angular_momentum_drift returns |L(t)-L0|/|L0| - a norm, so it is always
+    >= 0 and cannot tell shrinking from growing. Here we take the component of
+    L(t) along the unit vector u = L0/|L0| and compare it against |L0|, which
+    keeps the sign: negative means the orbit is losing angular momentum.
+    Returns a (T,) array.
+    """
+    L = np.array([
+        angular_momentum(SystemState(traj.masses, traj.positions[t], traj.velocities[t]))
+        for t in range(len(traj.times))
+    ])
+    L0_mag = np.linalg.norm(L[0])
+    u = L[0] / L0_mag  # unit vector along the initial angular momentum
+    return (L @ u - L0_mag) / L0_mag  # (T,) signed, relative to |L0|
+
+
 
 def kepler_solve(mean_anom, e, tol=1e-12, max_iter=100):
     """Solve Kepler's equation mean_anom = E - e*sin(E) for the eccentric anomly E, by Newton-Raphson"""
@@ -94,6 +112,63 @@ def run_convergence_sweep(state, integrator, step_sizes, t_final, a, e, G=1.0):
         assert traj.metadata["max_n_sub"] == 1  # substepping stayed dormant
         errors.append(position_error(traj, a, e)[-1])  # global error at the final time
     return np.array(errors)
+
+
+def local_slopes(step_sizes, errors):
+    """Slope of the log-log curve between each ADJACENT pair of points.
+    
+    Returns an (n-1,) array for n points.
+    """
+    return np.diff(np.log(errors)) / np.diff(np.log(step_sizes))
+
+
+def fit_region(step_sizes, errors, tol=0.3):
+    """Indicies of the straight middle of the log-log curve (integrator-dominated).
+    Trims both ends: large-h(not-yet-assympototic) and small-h (round-off floor)."""
+    logh = np.log10(step_sizes)
+    loge = np.log10(errors)
+    local = np.diff(loge) / np.diff(logh)  # slope between each adjacent pair
+    med = np.median(local)  # robust estimate of the true order p, ignores the outliers
+    clean = np.abs(local - med) < tol * abs(med)  # whch local slopes sit near the median
+
+    # longest contiguous run of clean slops -> the straight region
+    padded = np.concatenate(([False], clean, [False]))
+    diffs = np.diff(padded.astype(int))  # +1 where a run starts, -1 where it ends
+    starts = np.where(diffs == 1)[0]  # run start indices
+    ends = np.where(diffs == -1)[0]  # run end indices (exclusive)
+    k = np.argmax(ends - starts)  # the longest run
+    return np.arange(starts[k], ends[k] + 1)  # +1: n slopes span n+1 points
+
+
+def drift_growth_exponent(times, drift, threshold=1e-2):
+    """Exponent q of the running-max envelope of |drift| against time.
+
+    q ~ 0 means the error is bounded; q ~ 1 means it grows linearly in t.
+
+    Two details, both load-bearing:
+    - The RUNNING MAX is fitted, not |drift| itself. Leapfrog's drift oscillates
+      through zero, so fitting the raw series would mostly measure where in its
+      cycle each sample happened to land.
+    - Only the part of the run BELOW `threshold` is fitted. Once the relative
+      energy error reaches ~1% the trajectory is no longer the orbit that was
+      asked for, so it has stopped measuring the integrator. Without this,
+      Euler - which saturates at order-unity error within a fraction of an
+      orbit - reads as 'bounded', the exact opposite of the truth.
+
+    Returns (q, n_points, saturated).
+    """
+    envelope = np.maximum.accumulate(np.abs(drift))  # monotone: oscillation can't confuse it
+    saturated = bool(envelope[-1] >= threshold)
+
+    # t=0 has no logarithm, and neither does a still-zero envelope; drop those
+    # along with everything past the threshold
+    usable = (times > 0) & (envelope > 0) & (envelope < threshold)
+    if usable.sum() < 2:  # nothing left to fit a line through
+        return float("nan"), int(usable.sum()), saturated
+
+    q, _ = np.polyfit(np.log(times[usable]), np.log(envelope[usable]), 1)
+    return q, int(usable.sum()), saturated
+
 
 
 def convergence_order(step_sizes, errors, fit_slice=None):
