@@ -380,128 +380,413 @@ for RK4 circular — they should coincide across all 300 orbits.
 
 ## 2026-09-04 — Stage 8: experiment suite (build, results, extra checks, dataset)
 
-Suite was built across earlier sessions and never written up; this covers it retrospectively
-(reconstructed from code, results and session transcripts), plus two further diagnostic runs,
-closure work and the training dataset.
+Suite was built across earlier sessions and never written up; this covers it retrospectively,
+plus two further diagnostic runs, closure work and the training dataset.
 
-### Built — `experiments.py`
-- Generate/reduce split: generate → HDF5 in `C:/nbody_raw/<set>/` (outside the repo — it's a
-  OneDrive folder), reduce → tables in `results/`. `run_path` built first so 55 files couldn't
-  end up inconsistently named.
-- **Set A** (Q1): circular, 3 integrators × 15 h over `geomspace(1e-1, 1e-4)`, 5 orbits,
-  resampled to 200 — Q1 only reads `t_final`, which drops Set A from ~150 MB to nothing.
-- **Sets B/C** (Q2–Q4): B = both scenarios × 3 integrators @ 400 spo; C = (LF, RK4) @ 200 and
-  800. All 300 orbits, unresampled.
-- From the handoff spec: Euler is out of Set C because the crossover is an LF-vs-RK4 question;
-  200/400/800 is ×4 in h → ×16 in crossover time; predicted crossovers of ~4/15/60 orbits are
-  why the runs are 300 orbits.
-- **Set C was specified circular-only.** The eccentric half was added mid-build as an
-  extension — and it's what produced LF s=2 eccentric vs s=4 circular, the anomaly the whole
-  interpretation session exists to explain.
+### Decision — separate generating the data from reducing it
+Simulations go to HDF5 outside the repo; reduction writes small tables into `results/`. The
+point is that tweaking a plot must never mean re-running expensive simulations — the Stage 8
+deliverable line asked for exactly this. Built `run_path` first, before any run, so 55 files
+could not end up inconsistently named.
+
+Three sets, each shaped by the question it answers: **Set A** for Q1 (circular, three
+integrators across four decades of step size, only the final state matters, so it resamples
+from ~150 MB down to nothing); **Sets B and C** for Q2–Q4 (300 orbits, every step kept).
+Euler is deliberately out of Set C because the crossover being tested is a Leapfrog-vs-RK4
+question. The step sizes are a factor of four apart, and 300 orbits is chosen to be long
+enough for the predicted crossovers to actually happen.
+
+**Set C was specified circular-only; I added the eccentric half mid-build as an extension.**
+That turned out to matter — it is what produced Leapfrog's different energy-scaling behaviour
+on eccentric orbits, the anomaly the whole interpretation session exists to explain.
 
 ### Results — Q1 to Q4
-- **Q1** p = Euler 0.89 / LF 2.00 / RK4 4.37. Euler fits 6/15 (large-h error is O(1) — no
-  order left to measure), RK4 11/15 (four smallest h are round-off floor).
-- **Q2** `growth_ratio` (2nd-half max / 1st-half max) gives LF 1.00, RK4 2.00 (= linear in t)
-  — **but reads Euler backwards** (1.06 ≈ "bounded"), because Euler saturates at O(1) error
-  and has nowhere left to grow. Fix is a *window*, not a new ratio: fit the log-log slope of
-  the running-max envelope over the part below 1% drift. That exponent is **q** — LF 0.017,
-  RK4 1.000, Euler 0.999 (saturated flag; 20 points, to orbit 0.05). Threshold sensitivity:
-  1e-2 → 0.999, 5e-2 → 0.992, 1e-1 → 0.962, 3e-1 → 0.791.
-- **Q3** LF conserves L to machine precision, 2.5e-14 / 6.0e-14 — exactly, not approximately.
-  RK4 2.5e-8 / 1.3e-6, Euler 1.37 / 0.58. Expectation had been round-off level for all three;
-  wrong — central forces conserve L in the *continuous* equations only.
-- **Q4** At equal h on eccentric, RK4's energy error is *smaller* (8.8e-6 vs 6.7e-4) at twice
-  the cost, but bounded-vs-growing means RK4 crosses LF eventually. Character, not magnitude.
+- **Q1 (convergence orders): confirmed.** Euler ~1, Leapfrog 2.00, RK4 4.37 against theory of
+  1, 2, 4. Euler only fits over part of the range because at large steps its error is already
+  as big as the answer, so there is no order left to measure; RK4's smallest steps sit on the
+  round-off floor.
+- **Q2 (bounded vs drifting energy error): confirmed, but the original measure was broken.**
+  Comparing the second half of a run to the first says Leapfrog is bounded and RK4 grows
+  linearly — correct — but it reads **Euler backwards**, calling it bounded. The reason is that
+  Euler's error saturates near 100%: it has nowhere left to grow. Fix is a *window*, not a
+  different ratio — fit the growth only over the part of the run still below 1% drift.
+- **Q3 (angular momentum): expectation was wrong.** I expected all three integrators to
+  conserve it at round-off level. Only Leapfrog does, and it does so *exactly*, not
+  approximately. RK4 and Euler both lose it. Central forces conserve angular momentum in the
+  continuous equations; whether a given integrator inherits that is a separate question.
+- **Q4 (accuracy vs long-term correctness): the trade-off is real but not where I expected.**
+  On eccentric orbits RK4's energy error is *smaller* than Leapfrog's at the same step size,
+  and still smaller at equal cost. Leapfrog wins because its error stays bounded while RK4's
+  grows, so RK4 eventually crosses it. **The argument is about the character of the error, not
+  its size** — recorded explicitly so the write-up cannot overclaim.
 
-### q existed only in a chat log
-The 1%-threshold fix was agreed in an earlier session but never implemented — `main()`
-regenerated every Stage 8 result *except* the agreed Q2 answer. Now
-`analysis.drift_growth_exponent`, with `q` / `q_n_points` / `saturated` columns.
-`growth_ratio` kept: valid whenever the run hasn't saturated.
+### The agreed Q2 fix existed only in a chat log
+The 1%-window fix had been agreed in an earlier session and never implemented, so `main()`
+regenerated every Stage 8 result *except* the agreed Q2 answer. Now in `analysis.py`.
+Kept the old ratio alongside it, since it is valid whenever a run hasn't saturated.
 
-Two eccentric values that had never been measured:
-- **Euler → `nan`** — starts at periapsis, passes 1% within one step, one usable point.
-- **RK4 → 0.84–0.90, not 1.00**, ordered by step size (0.934 / 0.896 / 0.840 at 200/400/800).
-  Fitting artefact: the envelope is `A + B·t` and the early flat `A` drags the slope down.
-  Refitting over t > 50 orbits gives 0.991 / 0.982 / 0.964. Smaller h keeps the ripple
-  dominant for more orbits, so more plateau — the same h·t crossover Set D found in *s*,
-  appearing independently in *q*. `q` left as defined; a per-scenario window would be prettier
-  and less honest.
+Measuring the two eccentric cases that had never been run exposed a fitting artefact: RK4 came
+out below its expected value, ordered by step size, because the early flat part of the curve
+drags the fit down. Refitting later in the run recovers the expected answer. **Left the
+definition alone** — a per-scenario window would look better and be less honest.
 
-### Set D — RK4 energy scaling at 5 orbits
-Eccentric e=0.5, RK4 only, 10 h over Set A's window, no resampling (the metric is a max over
-the run). `assert max_n_sub == 1`, ε=0.
+### Set D — an answer that fits neither prediction
+Ran RK4 alone on a short eccentric orbit across ten step sizes to pin down how its energy
+error scales with step size. Result sits **between** the two candidate answers, and the local
+slope *changes across the range* — which neither candidate describes.
 
-**s = 4.52** on 8/10 points. Trimmed: the two smallest h, round-off floor (error rises,
-7.6e-14 → 1.3e-13). Local slopes small→large h: `-0.67 1.58 | 3.97 4.20 4.35 4.53 4.71 4.84 5.05`.
+Not a falsification: the expected behaviour is there at the small-step end. But the scaling
+varies with step size within a single run length, which is a genuine open question rather than
+a measurement problem. Checked the obvious artefact — the smallest steps are contaminated by
+round-off and were trimmed — and confirmed the correction is far too small to explain the
+trend. No higher-precision float is available on Windows to cross-check against.
 
-**Neither ≈4 nor ≈5.** Not falsified — h⁴ is there at the small-h end — but s varies with h
-*within a single end time*, which neither candidate describes. Caveat: the leftmost fitted
-point is ~22% round-off and so biased low; quadrature correction gives 4.00, linear gives 4.28,
-and linear would break the monotone trend — so the correction is ~0.03, not ~0.3. First
-floor-free slope is 4.20. `np.longdouble` is float64 under MSVC: no cheap precision check.
+### The shape of RK4's error — re-analysis, no new runs
+Set B already stored every step, and energy drift was already signed; only angular momentum
+needed new code, since the existing function returns a magnitude.
 
-### Sign structure of RK4's error — Set B re-analysis, no new simulation
-Set B stores every step and `energy_drift` was already signed. Only L needed new code, since
-`angular_momentum_drift` returns a norm: added `angular_momentum_signed_drift` (projects L
-onto û = L₀/|L₀|).
+**RK4's error is single-signed and never once crosses zero**, in either energy or angular
+momentum, in both scenarios, and the two share a sign. On circular orbits the energy loss is
+exactly twice the angular momentum loss — the textbook signature of a slow inward spiral at
+fixed orbit shape. Two independently computed quantities landing on the predicted ratio means
+**the spiral is literal, not a metaphor**. On eccentric orbits the loss arrives in per-orbit
+events at periapsis: angular momentum steps down cleanly, energy drops then partly recovers.
 
-    scenario    ΔE/E₀  sign/cross/monotone/final      ΔL/L₀  sign/cross/monotone/final
-    circular      − / 0 / 1.0000 / -5.01e-8             − / 0 / 1.0000 / -2.50e-8
-    eccentric     − / 0 / 0.5060 / -8.70e-6             − / 0 / 1.0000 / -1.35e-6
+### Closure work
+Added the plotting functions the stored columns were written for, and a `main()` so
+`python experiments.py` regenerates everything — the Stage 8 deliverable line, previously
+unmet. The long-run plot independently recovers the interpretation session's exponents, refit
+by code that did not know them, which is the closest thing to a blind check available here.
+Euler is excluded from that plot because its drift of ~100% stretches the axis six decades.
 
-Single-signed negative, **zero crossings anywhere**, ΔE and ΔL sharing a sign; every series'
-max is exactly 0.0, the t=0 point. Circular strictly monotone at both zoom levels. Eccentric
-loss arrives in per-orbit events at integer orbit number = periapsis (inferred from the ICs,
-not measured): **ΔL a clean staircase, ΔE dropping then partly recovering** — that recovery is
-what the 0.506 counts. Circular ΔE/ΔL = 2.0000, reproducing the earlier ratio on signed data;
-eccentric 6.46.
+### Bridge — dataset generated, and NOT clean
+Ran the Stage 5 pipeline, Leapfrog only, 360 trajectories in about 46 minutes. **28 of 260
+cluster runs exceed the energy tolerance**, the worst at 125% — which is no longer physics.
 
-### Closure
-`skip_existing` on the two remaining generators (presence-based — changing `n_orbits` without
-deleting the set silently skips stale files). `reduce_convergence` → `(orders, rows)`.
-**`plot_convergence_set`**, what the `in_fit` column was written for: p = 0.89 / 2.00 / 4.37
-from the stored set, matching the notation block. **`plot_long_runs_scaling`** (B+C, three
-points per line): recovers LF s = 4.00 / 2.00 and RK4 5.00 / 4.99 — the interpretation's
-exponents, refit by code that didn't know them. Euler excluded (one h, and its drift of ~1
-stretches the axis six decades). **`main()` + `__main__` guard**: `python experiments.py`
-regenerates everything — the Stage 8 deliverable line, previously unmet.
+**It is not the failure mode I predicted.** I expected the heavy-mass-ratio tail; failures are
+spread across mass ratio and N, and plenty are in the training split. They *do* lean towards
+hot systems. And the substep count is essentially the same for passing and failing runs, so
+this is not "ran out of substeps". Nothing regressed either — the Stage 5 smoke test only
+covered one configuration, so this is the first end-to-end validation of the whole set.
 
-### Bridge — dataset generated, NOT clean
-Stage 5 pipeline, Leapfrog-only (already hardcoded): 360 trajectories → `C:/nbody_data/`,
-46.6 min, 21 MB. **`validate_dataset`: 28/260 clusters (10.8%) over the 3e-2 tolerance** —
-~19 between 3e-2 and 1e-1, ~9 severe, worst **1.25** (125%, not physics any more).
-
-Not the predicted `mass_ratio=15` tail. Failure rates: 10/16/20/6/8/20% across ratio
-1/3/5/7/10/15; 5/5/16/8/18/10% across N = 3/4/5/7/8/10; 7/12/**40**% across Q < 0.7 / 1.1–1.5
-/ ≥ 1.5. Plenty are `train` split. `max_n_sub` is the same for passing and failing runs
-(median 222 vs 240) — not "ran out of substeps". Nothing regressed: the Stage 5 smoke test
-covered one config, so this is the first end-to-end validation of the full set.
-
-### Decisions
-- New CSVs rather than appending — neither existing schema fits.
-- Plots of *saved* data live in `experiments.py`; `visualisation.py` keeps its fresh-sim rule.
-- `fit_region` untouched: it trims the floor correctly, but its ±0.3×median (≈±1.4) can't see
-  a 4.2→4.9 bend, so local slopes carry the Set D fit. Retuning risks Q1's published p.
-- `local_slopes` extracted, but `fit_region` keeps its own log10 copy — same maths, but a
-  threshold comparison, so bit-level differences could flip a borderline point.
-- The two reduce functions kept separate; merging would rewrite `convergence.csv`'s schema.
+### Other decisions
+- New CSVs rather than extending existing ones — neither schema fitted.
+- Plots of *saved* data live in `experiments.py`; `visualisation.py` keeps its rule of only
+  plotting fresh simulations.
+- **Left the fit-trimming logic untouched.** It removes the round-off floor correctly, but its
+  tolerance is too wide to see Set D's bend, so Set D's answer comes from local slopes instead.
+  Retuning it would risk changing Q1's published orders.
+- Kept the two reduce functions separate; merging them would rewrite a published CSV's schema.
 
 ### Broke / gotchas
-- `growth_ratio` reads Euler backwards (above) — only meaningful while unsaturated.
-- Q3 expectation wrong: round-off-level L drift predicted for all three, only LF delivers it.
-- `circular_period()` is 2π√(a³/G(m₁+m₂)) = 4.443, not 2π — cost estimates came out 40% high.
-- t=0 is identically zero in every drift series; a naive sign test calls that a crossing.
-- CSV booleans read back as truthy strings `"True"`/`"False"`, so every point looks fitted —
-  both plot functions take the reduce's return value, not the file.
+- The circular-period helper is the full Kepler expression, not 2π, so early cost estimates
+  came out 40% high.
+- Every drift series starts at exactly zero, so a naive sign test counts that as a crossing.
+- CSV booleans read back as the strings `"True"`/`"False"`, both truthy — so every point looks
+  as though it was included in the fit. Both plot functions take the reduce step's return value
+  rather than re-reading the file.
 
 ### Outstanding
-- **Dataset quality**: accept 3–10% drift and address only the ~9 severe runs; or raise
-  `n_resolve` and regenerate the 28 (the driver skips existing files, so minutes); or check
-  whether the severe ones are physical ejections. Next session.
-- 20/50/150-orbit sweeps not run — deferred once s turned out to vary with h within a single
-  end time, which isn't what that map tests.
-- For the Project: (1) does s varying with h at fixed end time fit the θ⁶/72 account, where
-  θ = ωh isn't constant around an eccentric orbit? (2) is quadrature the right model for
-  combining truncation and round-off when the metric is a *max*?
+- **Dataset quality** — accept a few percent drift and address only the worst handful; or raise
+  the substep resolution and regenerate the failures; or check whether the worst are physical
+  ejections rather than errors. Next session.
+- Shorter orbit sweeps dropped once Set D showed the scaling varies with step size within a
+  single run length, which isn't what those sweeps test.
+- For the Project: does that varying scaling fit the phase-error account, given the relevant
+  angle isn't constant around an eccentric orbit?
+
+---
+
+## 2026-09-05 — Stage 8 diagnostic: is the dataset drift metric unfair to hot systems?
+
+Read-only. Nothing regenerated, no tolerance changed. New `diagnostics_energy_metric.py`.
+
+### The question
+28 of 260 cluster runs failed the energy check, and the failures leaned towards high-Q
+(hot) systems. Suspicion: the metric itself is at fault, not the integration. It scores drift
+as a fraction of **total** energy, and total energy is kinetic plus potential — which nearly
+cancel when Q approaches 2. So the thing we divide by shrinks towards zero, and identical
+integration quality looks worse and worse. Retested against potential energy alone, which
+is always well away from zero.
+
+### What I found
+- **The bias is real but not the whole story.** Rescaling amplifies error by up to 9× on the
+  hottest runs. Yet after removing it the Q ordering weakens rather than disappearing — the
+  hottest bin still fails ~3× more often than the middle. So something physical remains.
+- **Closeness predicts drift far better than anything else.** Rank correlation with closest
+  approach is about −0.8 under either metric; Q, N and mass ratio are all weak by comparison.
+  **Every severe run comes inside the softening length**, against a set-wide median of ~13×
+  softening.
+- Nine of the ten worst runs bleed energy gradually across many encounters rather than losing
+  it in one event, so this is accumulated error, not a single catastrophic step.
+- No run has Q above 2, so the old metric was at least always well-defined.
+
+### Gotchas
+- Closest-approach values come from **saved snapshots**, so they are upper bounds — the true
+  minimum between two saved rows could be smaller. The ordering is safe; the numbers are not.
+- The hottest bin holds only 10 runs, so one run moves it 10 percentage points. It cannot
+  carry an argument on its own.
+
+### Open
+- No decision taken, dataset untouched. Interpretation goes to the Project.
+
+---
+
+## 2026-09-05 — Stage 8 diagnostic: how well resolved is the deepest part of an encounter?
+
+Read-only. Nothing changed. New `diagnostics_substeps.py`.
+
+### The question
+If closeness predicts drift, the natural suspect is the substep rule under-resolving deep
+encounters. Substep sizes are not stored, so I reconstructed them by replaying the rule
+against the saved states.
+
+### What I found
+- **The accuracy knob already existed.** `n_resolve` (default 24) was in the code all along;
+  the incoming estimate of the effective resolution was off by about 4.5× because it ignored it.
+- **The predicted resolution was wrong, but the ordering was right.** Predicted 5–20 steps per
+  orbit at closest approach; measured 57–172. Severe runs are still about 5× less resolved
+  than quiet ones, so the hypothesis survives in direction if not in magnitude.
+- **The important find: resolution gets *worse* the closer bodies get.** Softening makes the
+  force weaken again below ε/√2, so the rule sees a smaller acceleration and *relaxes* the
+  step — while the pair's orbit keeps getting faster. Going deeper is penalised twice over.
+  This is the mechanism behind everything that follows.
+- **Most severe runs are trapped pairs, not single passes.** Seven of ten spend thousands of
+  close orbits together across dozens of separate episodes.
+- **Substepping never idles** — the criterion is tied to softening rather than actual
+  separation, so it is always active and cost scales linearly with `n_resolve`.
+
+### Gotchas
+- Fitting the error curve without trimming the round-off floor gave the wrong slope and
+  shifted the resolution targets by ~2×.
+- Time inside an encounter has to be weighted by the gap between snapshots, since the saved
+  cadence is deliberately non-uniform. A raw row count over-weights encounters.
+
+### Open
+- Untested: whether error over ~10,000 close orbits follows the short-run scaling at all.
+
+---
+
+## 2026-09-05 — Stage 8 diagnostic: is adaptive stepping itself the problem? (cluster_01246)
+
+Diagnostic only. New `diagnostics_symplectic.py`, carrying its own loops so fixed-step runs
+bypass the substep machinery entirely. Gate: replay matched the stored run exactly.
+
+### The question
+Leapfrog conserves energy well because of its structure, and that guarantee assumes a
+**constant** step. We vary the step. So: does varying it break the guarantee?
+
+### The answer — no
+Ran the same cluster four ways: adaptive coarse, adaptive fine, and fixed-step at two sizes.
+The coarse adaptive run ramps away; the fine adaptive run is **flat**. Both use the same
+variable-step machinery. If varying the step were the cause, both would ramp and only the
+size would differ.
+
+**So the cause is under-resolution and adaptivity is incidental.** That is the finding that
+redirected everything afterwards — towards resolving encounters better, not towards
+abandoning adaptive stepping.
+
+Supporting: halving the step quarters the error for *both* the adaptive pair and the fixed
+pair, the textbook behaviour, measured before the chaotic trajectories separate.
+
+### Also worth recording
+The close pair hardens or gets ejected in **every** run, including the best-resolved one. So
+that is real physics, not an integration artefact — what changes with resolution is only
+which branch the trajectory takes afterwards.
+
+### Gotchas
+- Had to sample every few substeps. At the stored 100-snapshot cadence the error band is
+  invisible — the pair completes ~29,000 orbits over the run.
+- Plotted on log axes; on linear axes the three well-behaved runs vanish against the bad one.
+
+---
+
+## 2026-09-07 — Stage 8 diagnostic: does more resolution fix the other flagged runs?
+
+Diagnostic only. Three flagged clusters at the old and new resolution. New
+`diagnostics_generalisation.py`. All three gates reproduced the stored runs exactly, so the
+pipeline is deterministic.
+
+### What I found
+- **All three flatten at the higher resolution**, landing two orders below the tolerance.
+- **But only one of the three is a fair comparison.** Chaos means changing the step changes
+  the trajectory. In one run the close pair never formed at all at the higher resolution, so
+  its flatness proves nothing; a second had far less encounter exposure. Only `cluster_01038`
+  forms the same binary, holds it as long, ends *more* tightly bound — and is still flat.
+  The case rests on that one run.
+
+### The find that changed the project
+**Stored closest-approach values are upper bounds, and can be wrong by 11.7×.** Saved
+snapshots sit on outer-step boundaries, so an approach that begins and ends inside one step
+is invisible. Tracking every substep instead, `cluster_01078`'s true closest approach is
+0.122ε, not the 1.43ε on file.
+
+Two consequences. It was picked as the run that fails *despite* adequate resolution — it
+isn't; it is the deepest of the three. **That test was therefore never performed, and no run
+in the sample fails while genuinely well resolved.** And every earlier depth-based conclusion
+rests on the same biased numbers: the direction is safe, the boundaries are not.
+
+Also: the steps-per-orbit formula matches measurement to 0.1% except in the deepest case,
+where it is 25% out — because the rule watches the largest acceleration anywhere in the
+system, and a very close pair's own acceleration falls towards zero. It fails precisely in
+the regime the fix targets.
+
+### Open
+- No fix implemented. A substep-level pass over all 260 runs is needed before the depth
+  evidence can be trusted.
+
+---
+
+## 2026-09-07 — Stage 8: close-encounter recording gap, measured and fixed
+
+Regeneration NOT done and not authorised. Changed `simulation.py` (opt-in event recording,
+always-on true minimum tracking) and `scenarios.py` (new `merge_event_rows`). 46/46 tests pass.
+
+### Decision
+**Record close-encounter rows from inside the substep loop, triggered on separation, at
+log-spaced shells.** Three parts, each with a reason:
+
+- **Inside the loop**, because separations are invisible outside it. At ε=0.002 a tight pair
+  orbits about seven times per outer step, so an entire encounter can begin and end between
+  two saved rows. This also fixes the 11.7× under-reporting as a side effect, by tracking the
+  true minimum unconditionally.
+- **On separation, not acceleration.** Softened acceleration peaks at ε/√2 and *falls* below
+  it, so it is two-valued in radius — a(0.2ε) ≈ a(2ε). It cannot tell an approach from a deep
+  plunge, so it cannot be the trigger. Kept the existing 3ε threshold; the measured
+  distribution gave no reason to move it.
+- **Log-spaced shells (3ε down to 0.2ε, once in and once out), not every substep.** Row count
+  is then set by geometry rather than by how many substeps the solver chose — which keeps file
+  size independent of `n_resolve`, the property the 08-13 "substeps discarded" decision was
+  protecting. Caps at 16 rows per encounter.
+
+### Two findings that qualified the premise
+- **There is no missing extreme acceleration.** Softening imposes a ceiling, and the existing
+  dataset already reached it. What was missing was **density**: under 10% of stored rows were
+  inside 3ε and under 0.5% inside 1ε.
+- Hence the goal is coverage inside encounters, not reaching larger values.
+
+### Verified
+- **Recording does not touch the physics** — positions, velocities and accelerations bitwise
+  identical to a control run, force evaluations and substep counts unchanged. Event rows reuse
+  an acceleration the solver had already computed, so they cost nothing.
+- 263 rows below 1ε on the test cluster where there were previously none. File ×4.4.
+- Merged output strictly ordered with no duplicate timestamps.
+
+### Open
+- Regeneration of the 360, and `generate_dataset` is deliberately **not** wired to use any of
+  this yet.
+
+---
+
+## 2026-09-23 — Stage 8: closest-approach row, step-size floor, old dataset deleted
+
+Changed `simulation.py` and `scenarios.py`. 46/46 tests pass. Dataset deleted, regeneration
+not yet run.
+
+### Decision 1 — record the closest approach itself
+The innermost shell sits at 0.2ε but encounters go deeper, so the deepest part of the deepest
+encounters still produced no row. Rather than guess a lower floor — which would be the same
+unjustified constant one step down — **record the turning point itself, so the floor stops
+mattering at any depth.**
+
+Detected by watching three consecutive substeps and taking the middle when it is closer than
+both neighbours. **Saved as the real integrated substep, never an interpolation**: an
+interpolated state's acceleration would not satisfy the force law, and exact accelerations are
+the entire value of this dataset. The cost of taking the middle rather than the exact turning
+point is about 1% in separation, because separation flattens out near its minimum.
+
+Capture is limited to the encounter region. The tracked separation is a minimum over *all*
+pairs, so it wobbles constantly as different pairs take turns being closest; ungated, the test
+would fire thousands of times a run instead of about once per encounter.
+
+### Decision 2 — a step-size floor, but only inside encounters
+Below the softening radius the pair's orbital period stops shrinking while the adaptive rule
+keeps *growing* the step (the 09-05 mechanism). A floor fixes that.
+
+**Rejected the ungated version on measurement.** It is built on the period of the tightest
+orbit the system could possibly form — a configuration that almost never occurs — so applied
+everywhere it binds on essentially every substep and costs 4.3× for no accuracy gain. Gated to
+encounters it costs nothing measurable.
+
+**Kept anyway, as a bound rather than a working mechanism.** Justification is *not* "no run
+goes that deep": true minima were known for only 3 runs out of 260, the distribution was
+unmeasured, and regenerated runs take different chaotic branches. If it ever fires that is
+information about encounter depth, not a failure.
+
+### What contradicted the plan
+The argument for skipping the floor rested on a "deepest approach in the set" figure taken
+from **saved snapshots** — the very measurement this investigation had already shown to be an
+upper bound wrong by up to 11.7×. Disregarded.
+
+Also: the analytic estimate of where the floor would engage is unreliable, because resolution
+is not monotonic in depth. Replaced it with direct measurement.
+
+### Also decided
+- `n_resolve` raised 24 → 96, passed from `generate_dataset` rather than changed as a default,
+  so the Q1–Q4 experiment code is untouched.
+- Old dataset deleted, and **resume capability added first** — `skip_existing` is
+  presence-based, so deleting beforehand is what makes it mean "resume" rather than "silently
+  keep stale files".
+
+---
+
+## 2026-09-25 — Stage 8: regeneration complete, stage closed
+
+360 files regenerated overnight, about 3.5 hours. No failures, no bad timestamps, no tag
+mismatches. Six times as many rows as before.
+
+### Verified first
+**Every saved acceleration matches the force law exactly** — recomputed across thousands of
+rows, zero difference. This is the check the whole GNN stage rests on: a row-alignment slip in
+the merge would have left every other measure looking fine while the training targets were
+quietly wrong.
+
+### Decision — new tolerance, set from the data
+Switched the energy check to score against potential energy rather than total, removing the
+hot-system bias found on 09-05, and kept the old number alongside so the change stays
+auditable.
+
+**Clusters 1e-2, two-body 1e-4.** The cluster value is the one that flags the *same number* of
+runs as the old tolerance did — so the switch changes *which* runs are flagged, not how strict
+the check is, which is the cleanest way to justify it. Anything from 5e-3 to 1e-2 flags the
+same three runs, so it is not finely tuned. Two-body is four orders cleaner than clusters and
+needed its own, far tighter, value; the old shared tolerance could never have fired on it.
+
+Comparing old and new data on the same footing, failures fell by roughly an order of magnitude
+and the hot-system bias is gone. Drift now correlates almost entirely with encounter depth.
+
+### Decision — keep all 360 for training
+Three runs exceed the tolerance. They are kept, because **energy drift means the trajectory
+wandered, not that the targets are wrong** — their accelerations are exact like everything
+else. Only the rollout comparisons in Stage C need a trustworthy trajectory, so those draw
+references from the other 357.
+
+### Decision — no finer regeneration
+Tested one flagged run across four resolutions. Halving the step quarters the error, textbook
+behaviour, so the error *is* resolution-limited and could be reduced. But the flagged run is
+**chaotic bad luck, not a systematic fault**: at the production setting it happened to fall
+into a branch reaching three times deeper with ten times the encounters. Regenerating finer
+would reshuffle which runs are awkward rather than fix these, at roughly 54 hours. Not worth it.
+
+**The new rows also make errors look worse than before.** They land on the exact instant of
+peak energy error, which the old dataset structurally could never see — so the improvement
+above is understated, and the new data is being marked on a harder exam.
+
+### What the data now shows
+The encounter-depth distribution exists for the first time: the deepest run is far deeper than
+the old snapshot-based estimate had suggested, and the strong-force region is covered by about
+half the runs rather than a lucky few. Strong-force samples are roughly 70× denser than before,
+though the *maximum* barely moved — the old set already held one lucky snapshot near the
+physical ceiling. Below 0.2ε coverage is genuinely thin, so expect the GNN to be weakly
+constrained there; that is a property of the initial conditions, not of the recording.
+
+### Open
+- Row counts per file vary by ~500×, because event sampling deliberately favours encounters.
+  Handled at the data loader by weighting each row by the time it represents — which is why
+  unique, increasing timestamps were a hard requirement. Deferred to Stage A.
+- Whether to raise the step-size floor so it engages at moderate depths: Project decision.
+- Promote the smoke test's bitwise checks into `tests/`.
+
+### State
+**Stage 8 complete** — Q1–Q4 answered and unaffected, Leapfrog confirmed as ground-truth
+generator, final training dataset regenerated and verified. Ready for GNN Stage A.

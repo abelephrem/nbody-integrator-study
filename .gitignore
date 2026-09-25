@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 .DS_Store
 results/raw/
+
+# Derived caches and time-series blobs: regenerable from the scripts in the repo,
+# or superseded when the dataset is regenerated. Kept on disk, not versioned.
+results/*.npy
+results/*.npz

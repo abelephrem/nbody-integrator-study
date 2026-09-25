@@ -1,4 +1,4 @@
-﻿"""Initial condition scenarios — 2-body, figure-8, chaotic cluster."""
+"""Initial condition scenarios — 2-body, figure-8, chaotic cluster."""
 import numpy as np
 import glob
 import h5py
@@ -9,6 +9,7 @@ from scipy.spatial.transform import Rotation
 import os 
 from simulation import run_simulation, save_trajectory
 from integrators import leapfrog_step
+from time import perf_counter
 
 
 # Sweep axis definitions (one-axis-at-a-time holdout design)
@@ -277,15 +278,29 @@ def resample_uniform(traj, n_keep):
     )
 
 
-def generate_dataset(configs, out_dir, duration=20.0, dt=0.01, n_keep=200, n_baseline=100, softening=0.002):
-    """Run every config through Leapfrog; save a tagged, resampled HDF5 trajectory each."""
+def generate_dataset(configs, out_dir, duration=20.0, dt=0.01, n_keep=200, n_baseline=100,
+                     softening=0.002, n_resolve=96, n_core=100, skip_existing=True):
+    """Run every config through Leapfrog; save a tagged, resampled HDF5 trajectory each.
+
+    skip_existing makes a ~12h run restartable, but it is PRESENCE-based: it cannot tell a
+    file written by this run from a stale one left by an earlier one. Delete out_dir before
+    a regeneration, otherwise old files are silently kept.
+    """
     
     os.makedirs(out_dir, exist_ok=True)  # creates the output folder if it doesn't exist
     n_steps = round(duration/dt)  # duration is in nondimensional time units
     for config in configs:
+        path = os.path.join(out_dir, f"{config.scenario_type}_{config.seed:05d}.h5")
+        if skip_existing and os.path.exists(path):
+            print(f"{config.scenario_type}_{config.seed:05d} exists - skipped", flush=True)
+            continue
+
+        t_run = perf_counter()
         state = build_initial_state(config)
         traj = run_simulation(state, leapfrog_step, dt=dt, n_steps=n_steps, scenario_name=config.scenario_type, 
-                              G=1.0, softening=softening, adaptive=True)
+                              G=1.0, softening=softening, adaptive=True,
+                              n_resolve=n_resolve, record_events=True, n_core=n_core)
+        events = traj.events  # captured before resampling, which selects checkpoints only
         # choose the cadence that fits the scenario
         if config.scenario_type == "two_body":
             traj = resample_true_anomaly(traj, n_keep)
@@ -293,6 +308,10 @@ def generate_dataset(configs, out_dir, duration=20.0, dt=0.01, n_keep=200, n_bas
             traj = resample_events(traj, n_baseline)
         else:
             raise ValueError(f"unknown scensrio_type: {config.scenario_type}")
+        # Mid-substep encounter rows cannot be recovered by resampling - no checkpoint row
+        # exists to select. Two-body never opens an episode (periapsis 0.1 vs a 3*eps
+        # trigger), so this is a no-op there and needs no scenario branch.
+        traj = merge_event_rows(traj, events)
         traj.metadata = {
             **traj.metadata,  # preserve max_n_sub set by run_simulation
             "scenario_type": config.scenario_type,
@@ -300,8 +319,11 @@ def generate_dataset(configs, out_dir, duration=20.0, dt=0.01, n_keep=200, n_bas
             "seed": config.seed,
             **config.params,  # spills in every key from params
         }
-        path = os.path.join(out_dir, f"{config.scenario_type}_{config.seed:05d}.h5")
         save_trajectory(traj, path)
+        print(f"{config.scenario_type}_{config.seed:05d} {perf_counter()-t_run:6.1f}s  "
+              f"rows {len(traj.times):5d}  episodes {traj.metadata['n_episodes']:4d}  "
+              f"capped {traj.metadata['n_capped']:6d}  "
+              f"min_sep {traj.metadata['min_sep_run']/softening:7.2f} eps", flush=True)
 
 
 def resample_true_anomaly(traj, n_keep):
@@ -349,14 +371,23 @@ def resample_events(traj, n_baseline, event_factor=3.0):
     return replace(traj, positions=traj.positions[idx], velocities=traj.velocities[idx], accelerations=traj.accelerations[idx], times=traj.times[idx])
 
 
-def validate_dataset(directory, energy_tol=1e-2, cluster_energy_tol=3e-2, param_rtol=0.05):
+def validate_dataset(directory, energy_tol=1e-4, cluster_energy_tol=1e-2, param_rtol=0.05):
     """Sanity-check a generated dataset. Returns a list of human_readable problem
     strings - an empty list means every file passed.
 
-    Clusters get a looser energy bound: even with adaptive sub-stepping the extrap
-    mass_ratio=15 tail drifts ~2e-2 (a resolved, physical close encounter, not corruption),
-    so the tight two-body bound would false-flag it. The looser tol still catches real
-    blow-ups (unresolved encounters drift ~10-250x)."""
+    Energy error is scored as C = max|dE| / |U0|, NOT the old max|dE/E0|. With
+    Q = 2*T0/|U0| we have |E0| = |U0| * |1 - Q/2|, so the old denominator collapses as
+    Q -> 2 and inflated the error by up to 9x on hot systems for identical integration
+    quality. |U0| never passes through zero. The old value is reported alongside any
+    failure so the switch stays auditable; the full per-run table is in
+    results/energy_metric_diagnostic.csv.
+
+    Tolerances are set from the measured distribution of the regenerated dataset, not
+    inherited. Clusters: 1e-2 flags 3/260, and is the threshold count-matched to what the
+    old 3e-2 flagged - same strictness, fairer selection. Anything from 5e-3 to 1e-2 flags
+    the same 3 runs, so the value is not finely tuned. Two-body: worst observed C is
+    2.8e-6, so 1e-4 leaves 36x headroom while still being able to catch a regression - the
+    old 1e-2 sat ~170x above anything observed and could never fire."""
     issues = []
     for path in sorted(glob.glob(os.path.join(directory, "*.h5"))):
         with h5py.File(path,"r") as f:
@@ -378,10 +409,14 @@ def validate_dataset(directory, energy_tol=1e-2, cluster_energy_tol=3e-2, param_
                          G=G, softening=softening)
             for t in range(len(positions))
         ])
-        drift = np.max(np.abs((E - E[0]) / E[0]))
+        T0 = 0.5 * np.sum(masses * np.sum(velocities[0]**2, axis=1))
+        U0 = E[0] - T0  # softened potential at t=0, negative by the sign convention
+        C = np.max(np.abs(E - E[0])) / abs(U0)  # the scored metric
+        drift_old = np.max(np.abs((E - E[0]) / E[0]))  # reported only, for the audit trail
         tol = cluster_energy_tol if tags["scenario_type"] == "cluster" else energy_tol
-        if drift > tol:
-            issues.append(f"{name}: energy drift {drift:.2e} exceeds {tol:.0e}")
+        if C > tol:
+            issues.append(f"{name}: energy error C={C:.2e} exceeds {tol:.0e} "
+                          f"(old metric {drift_old:.2e})")
 
         # check parameters landed where sweep intended
         if tags["scenario_type"] == "cluster":
@@ -403,6 +438,35 @@ def validate_dataset(directory, energy_tol=1e-2, cluster_energy_tol=3e-2, param_
     return issues
 
 
-    
+def merge_event_rows(traj, events):
+    """Merge mid-substep close-encounter rows into an already-resampled trajectory.
 
+    `resample_events` keeps doing only its uniform-baseline job on the checkpoint rows.
+    The event rows cannot be recovered by any change to its selection logic - at eps=0.002
+    a tight pair completes ~7 orbits per outer dt, so an approach that begins and ends
+    inside one interval leaves no checkpoint row to select. They have to be captured
+    during integration (`run_simulation(record_events=True)`) and merged in here.
 
+    Rows are concatenated, sorted by time, and de-duplicated on exact timestamp with the
+    checkpoint row winning, so a substep that landed exactly on a checkpoint cannot appear
+    twice.
+    """
+    if not events or len(events["times"]) == 0:
+        return traj
+
+    times = np.concatenate([traj.times, events["times"]])
+    positions = np.concatenate([traj.positions, events["positions"]])
+    velocities = np.concatenate([traj.velocities, events["velocities"]])
+    accelerations = np.concatenate([traj.accelerations, events["accelerations"]])
+    # is_checkpoint marks the original rows so the dedupe can prefer them
+    is_checkpoint = np.concatenate([np.ones(len(traj.times), dtype=bool),
+                                    np.zeros(len(events["times"]), dtype=bool)])
+
+    # sort by (time, checkpoint-first) so np.unique keeps the checkpoint row of any tie
+    order = np.lexsort((~is_checkpoint, times))
+    times, positions = times[order], positions[order]
+    velocities, accelerations = velocities[order], accelerations[order]
+    _, keep = np.unique(times, return_index=True)  # first occurrence = the checkpoint one
+
+    return replace(traj, positions=positions[keep], velocities=velocities[keep],
+                   accelerations=accelerations[keep], times=times[keep])
