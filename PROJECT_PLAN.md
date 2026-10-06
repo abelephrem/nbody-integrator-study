@@ -1,57 +1,5 @@
 # Gravitational N-Body Simulation and GNN Surrogate Modelling — Project Stage Plan
 
-## Part 0: Workflow & Roles (Three-Track System)
-
-This project runs across three separate streams with three distinct jobs. None has live visibility into the others — so this section exists to make the division explicit rather than relying on any side guessing.
-
-### The three tracks
-
-**Claude.ai, this Project — the "why" track**
-- Role: concept explanations before code is written, stage planning and scope decisions, interpreting results against the physics, weekly progress check-ins, GNN conceptual pre-work before each GNN stage.
-- What it has: continuity of *reasoning* across sessions (this Project's memory), and on-request access to the GitHub repo (single-file fetch or full clone) when asked.
-- What it does NOT have: live awareness of what's been coded, what's currently broken, or how far along a stage you are. It must be told, or asked to go fetch.
-
-**VS Code + Claude Code extension — the "how" track**
-- Role: writing, running, debugging, refactoring, testing, committing. Anything that needs to see the actual file, the actual error, the actual diagnostics. Applies equally to simulator stages and GNN stages.
-- What it has: live file and diagnostic context this Project doesn't have.
-- What it does NOT have: the conceptual throughline — why a design choice was made, how a stage connects to the research questions, the physics or ML reasoning behind a result. That context lives here.
-
-**GNN learning track — the parallel reading stream**
-- Role: building the conceptual foundations for GNN implementation before any GNN code is written. Runs at roughly 2 hrs/week alongside the simulator work.
-- What it covers: neural network concepts (3Blue1Brown), the direct research precedent (DeepMind paper), and graph neural network mechanics (Distill.pub). See Part 4 for the week-by-week schedule.
-- What it is NOT: a full ML curriculum. PyTorch syntax, PyTorch Geometric, and the training loop are all learned in-context during GNN Stages A–C, the same way NumPy is learned during the simulator stages. The reading track covers concepts only; implementation knowledge comes from doing.
-- When it connects back here: before GNN Stage A begins, there is a conceptual pre-work session in this Project (same as the pre-work done before each simulator stage) covering training loops, loss functions, and backpropagation at a conceptual level — enough to interpret what the GNN is doing, not to implement it from scratch.
-
-### The decision rule
-
-> Does answering this need to see the actual running code/error in front of it? → **VS Code.**
-> Does answering this need to connect code behaviour to the physics, numerics, or research questions? → **this Project.**
-
-| Stay in VS Code | Come back to this Project |
-|---|---|
-| "This broadcasting throws a shape mismatch on line 12 — why?" | "Why does Leapfrog conserve energy better than RK4 even though RK4 has higher formal order?" |
-| "Explain this traceback" | "Does this energy-drift plot look like what we'd expect, or is something wrong?" |
-| "Refactor this to use a consistent interface" | "I'm starting Stage 3 — walk me through why a shared interface matters here" |
-| "Write a pytest for this function" | "I'm starting Stage 6 — what should the convergence-order fit actually look like conceptually?" |
-| Day-to-day syntax / NumPy / PyTorch questions tied to a specific file | Weekly check-in: progress vs. the timeline table, adjust scope if needed |
-| "Why is `r` going negative here" (debugging a value) | "Is this energy spike physics or a bug?" (interpreting what it means) |
-| "My training loss isn't decreasing — fix it" | "My training loss isn't decreasing — is this a learning rate problem or a data problem?" |
-
-### The bridge (since there's no automatic sync)
-
-- **Repo**: push to a public GitHub repo. This Project can fetch a single file (raw URL) or clone the whole thing on request — but only when asked, and only the state as of the last push. Treat it as pull-on-request, not live.
-- **Lab notebook** (`labbook.md`, see Notes below): your dated session log doubles as the bridge. A one-line status when you come back here — e.g. *"Finished Stage 2, energy roughly conserved, took longer than estimated due to a shape-mismatch bug"* — is usually all the recalibration needed.
-- **`CLAUDE.md`**: unlike this document, `CLAUDE.md` is read automatically by Claude Code at the start of *every* session — this file isn't. So `CLAUDE.md` should be short: the condensed role split and decision rule from this section, plus an explicit pointer ("see `PROJECT_PLAN.md` for the full stage plan, research questions, and timeline"). This document is committed to the repo as `PROJECT_PLAN.md` for reference — the extension *can* read it when relevant, but only `CLAUDE.md` is guaranteed to load without being asked.
-
-### The ritual
-
-1. **Before starting a new stage** → come here for the conceptual pre-work (as we did for symplectic integration before any code existed; same pattern will apply before GNN Stage A).
-2. **Finishing a stage, or stuck on a concept (not a bug)** → come here with a one-line status.
-3. **Debugging, syntax, refactoring** → stay in VS Code; don't route these here.
-4. **Roughly weekly** → check progress against the Part 4 timeline table here, adjust scope if running over.
-
----
-
 ## Part 1: Research Questions (the "why")
 
 Everything below should serve answering these. If a piece of code doesn't help answer one of these, it's scope creep — cut it or defer it.
@@ -312,3 +260,55 @@ The project runs two parallel tracks. The **simulator track** runs at 8 hrs/week
 - Stages 0–6 are the simulator backbone and should not be rushed. The GNN work is only as good as the simulator it builds on — errors in the training data corrupt the model.
 - **GNN learning approach**: the 2 hr/week parallel track covers concepts only (what a neural network is, what message passing does). Implementation knowledge — PyTorch syntax, training loops, PyTorch Geometric — is learned in-context during GNN Stages A–C, the same way NumPy is learned during the simulator stages. If training misbehaves and the cause is not obvious from the code, come back here rather than staying in VS Code.
 - **Lab notebook**: keep a dated, append-only log (`labbook.md` in the repo) — a few bullet points per session covering what you did, decisions made and why, anything that broke and how you debugged it, and results worth remembering. Lighter than git history (which shows *what* changed but not *why*), and it directly feeds Stage 10 — you will be reconstructing the project's narrative from this rather than from memory.
+
+---
+
+## Part 0: Workflow & Roles (Three-Track System)
+
+This project runs across three separate streams with three distinct jobs. None has live visibility into the others — so this section exists to make the division explicit rather than relying on any side guessing.
+
+### The three tracks
+
+**Claude.ai, this Project — the "why" track**
+- Role: concept explanations before code is written, stage planning and scope decisions, interpreting results against the physics, weekly progress check-ins, GNN conceptual pre-work before each GNN stage.
+- What it has: continuity of *reasoning* across sessions (this Project's memory), and on-request access to the GitHub repo (single-file fetch or full clone) when asked.
+- What it does NOT have: live awareness of what's been coded, what's currently broken, or how far along a stage you are. It must be told, or asked to go fetch.
+
+**VS Code + Claude Code extension — the "how" track**
+- Role: writing, running, debugging, refactoring, testing, committing. Anything that needs to see the actual file, the actual error, the actual diagnostics. Applies equally to simulator stages and GNN stages.
+- What it has: live file and diagnostic context this Project doesn't have.
+- What it does NOT have: the conceptual throughline — why a design choice was made, how a stage connects to the research questions, the physics or ML reasoning behind a result. That context lives here.
+
+**GNN learning track — the parallel reading stream**
+- Role: building the conceptual foundations for GNN implementation before any GNN code is written. Runs at roughly 2 hrs/week alongside the simulator work.
+- What it covers: neural network concepts (3Blue1Brown), the direct research precedent (DeepMind paper), and graph neural network mechanics (Distill.pub). See Part 4 for the week-by-week schedule.
+- What it is NOT: a full ML curriculum. PyTorch syntax, PyTorch Geometric, and the training loop are all learned in-context during GNN Stages A–C, the same way NumPy is learned during the simulator stages. The reading track covers concepts only; implementation knowledge comes from doing.
+- When it connects back here: before GNN Stage A begins, there is a conceptual pre-work session in this Project (same as the pre-work done before each simulator stage) covering training loops, loss functions, and backpropagation at a conceptual level — enough to interpret what the GNN is doing, not to implement it from scratch.
+
+### The decision rule
+
+> Does answering this need to see the actual running code/error in front of it? → **VS Code.**
+> Does answering this need to connect code behaviour to the physics, numerics, or research questions? → **this Project.**
+
+| Stay in VS Code | Come back to this Project |
+|---|---|
+| "This broadcasting throws a shape mismatch on line 12 — why?" | "Why does Leapfrog conserve energy better than RK4 even though RK4 has higher formal order?" |
+| "Explain this traceback" | "Does this energy-drift plot look like what we'd expect, or is something wrong?" |
+| "Refactor this to use a consistent interface" | "I'm starting Stage 3 — walk me through why a shared interface matters here" |
+| "Write a pytest for this function" | "I'm starting Stage 6 — what should the convergence-order fit actually look like conceptually?" |
+| Day-to-day syntax / NumPy / PyTorch questions tied to a specific file | Weekly check-in: progress vs. the timeline table, adjust scope if needed |
+| "Why is `r` going negative here" (debugging a value) | "Is this energy spike physics or a bug?" (interpreting what it means) |
+| "My training loss isn't decreasing — fix it" | "My training loss isn't decreasing — is this a learning rate problem or a data problem?" |
+
+### The bridge (since there's no automatic sync)
+
+- **Repo**: push to a public GitHub repo. This Project can fetch a single file (raw URL) or clone the whole thing on request — but only when asked, and only the state as of the last push. Treat it as pull-on-request, not live.
+- **Lab notebook** (`labbook.md`, see Notes below): your dated session log doubles as the bridge. A one-line status when you come back here — e.g. *"Finished Stage 2, energy roughly conserved, took longer than estimated due to a shape-mismatch bug"* — is usually all the recalibration needed.
+- **`CLAUDE.md`**: unlike this document, `CLAUDE.md` is read automatically by Claude Code at the start of *every* session — this file isn't. So `CLAUDE.md` should be short: the condensed role split and decision rule from this section, plus an explicit pointer ("see `PROJECT_PLAN.md` for the full stage plan, research questions, and timeline"). This document is committed to the repo as `PROJECT_PLAN.md` for reference — the extension *can* read it when relevant, but only `CLAUDE.md` is guaranteed to load without being asked.
+
+### The ritual
+
+1. **Before starting a new stage** → come here for the conceptual pre-work (as we did for symplectic integration before any code existed; same pattern will apply before GNN Stage A).
+2. **Finishing a stage, or stuck on a concept (not a bug)** → come here with a one-line status.
+3. **Debugging, syntax, refactoring** → stay in VS Code; don't route these here.
+4. **Roughly weekly** → check progress against the Part 4 timeline table here, adjust scope if running over.
