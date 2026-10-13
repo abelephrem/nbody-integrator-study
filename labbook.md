@@ -790,3 +790,74 @@ constrained there; that is a property of the initial conditions, not of the reco
 ### State
 **Stage 8 complete** — Q1–Q4 answered and unaffected, Leapfrog confirmed as ground-truth
 generator, final training dataset regenerated and verified. Ready for GNN Stage A.
+
+## 2026-09-29 — GNN pre-work: Stage A design decisions
+
+- Edges: fully connected, both directions (gravity is long-range; max 90 edges at N=10).
+- Node input: mass only. Edge inputs: displacement + distance.
+  Dropped velocity (acceleration doesn't depend on it; risk of a speed→pull shortcut
+  that breaks on holdouts) and absolute position (only differences matter).
+- Scaling: network learns 1/r² itself (not given as a feature). Relative-error loss,
+  because accelerations span ~8 orders of magnitude. Floor to be set from data.
+- Split: by whole file, within each setting combination → 208 / 36 / 36.
+  80 holdout files reserved for G4.
+- Row weights: store time weight per row. Sampling decides where examples are;
+  weights decide importance. Compare unweighted / time / kick (|a|·Δt per body)
+  by rollout error in Stage B.
+- Parked: step-size floor (before Stage B), G5 framing (before Stage C).
+
+## 2026-10-13 — GNN Stage A: graph construction (`gnn/`)
+
+### Built
+- `torch 2.14.0+cpu`, `torch_geometric 2.8.0.post1` in `.venv` (Python 3.12 — now the canonical
+  env). Pinned in `requirements.txt` with the PyTorch CPU index line.
+- `gnn/graph_data.py`: `complete_edge_index`, `time_weights`, `read_rows`, `file_to_graphs`,
+  `load_graphs`. One PyG graph per HDF5 row.
+- `gnn/split.py` → `gnn/splits/split.json` (seed 0).
+- Tests: `tests/test_graph_data.py` (7), `tests/test_split.py` (5). Full suite 58 pass.
+
+### Decisions
+- Graph: fully connected, both directions. `x` = mass (N,1). `edge_attr` = r_sender − r_receiver
+  (= `disp[r, s]` in forces.py) plus plain, unsoftened distance. `y` = stored acceleration.
+  PyG convention: messages flow from `edge_index[0]` (sender) to `edge_index[1]` (receiver).
+- float32 storage. Displacement computed in float64 first, then cast — subtracting nearly
+  equal positions in float32 would lose digits in close encounters.
+- Extra per-graph attributes: `weight` (trapezoidal time weight), `t`, `row`, for tracing.
+- Split by whole file within each setting: shuffle (seed 0), last → test, second-last → val.
+  208 / 36 / 36 files + 80 holdout. In graphs it is very uneven (train 120,491 vs val 8,724),
+  because rows per file vary ~500×; the time weights make each file count equally.
+- Loader: build graphs in memory at the start of each run (7 s, ~0.5 GB). Measured faster than
+  loading a saved `.pt` (13 s), and can't go stale.
+- Loss: relative error on the whole vector, with a floor. Floor from F < 0.1·|a_esc|/ρ →
+  2e-3 to 5e-3 at ρ = 1e-2; confirm with a 3-value sweep in Stage B. The Project's
+  error-injection rollout test was dropped: ~9 h, its main result predictable on paper, and it
+  needed a change to simulation.py.
+
+### Measured (step 7)
+- Train |a| from 2.3e-4 to 8.0e4 (8.5 decades); holdout down to 1.6e-4.
+- The smallest are cluster escapers (median 46 from the centre of mass, 47 from the nearest
+  body) — distance, not mass. Two-body |a| never below ~2.
+- Components go down to 4e-8 → a per-component relative loss would blow up; ruled out.
+
+### Broke
+- **Eccentric two-body files contain duplicate rows.** `resample_true_anomaly` picks from stored
+  steps at dt = 0.01, too coarse at periapsis for e ≥ 0.8 (1.2–6.3 rad per step; `np.unwrap`
+  fails above π). Affects 20 train files (e = 0.8) and 5 holdout (e = 0.9);
+  two_body_00075–00079 also end at t = 19.83. Targets are still exact.
+  Found by the "weights add up to 20" test. Missed earlier because the 09-25 "no bad
+  timestamps" check covered the cluster merge only, and test_true_anomaly_uniform_in_angle runs
+  at e = 0.6, dt = 1e-3 — never at production settings.
+  Temporary fix: `read_rows` drops repeated timestamps (marked TEMPORARY);
+  `KNOWN_SHORT_FILES` in the weights test. Real fix (choose_dt + regenerate the two-body files)
+  is Phase 2, before Stage B.
+- The recompute test first failed on one small component (per-component tolerance). Fixed by
+  comparing each body's vector error with its vector size — same lesson as the loss floor.
+
+### Open
+- Phase 2 dataset fix. Also ask: is ~1.5 rows per orbit enough for two_body_00075
+  (≈130 orbits in 20 time units)?
+- Stage B: loss weighting (unweighted / time / kick), floor sweep, step-size floor question.
+- Uncommitted comment fixes in simulation.py. (PROJECT_PLAN.md Stage A section updated to match.)
+
+### State
+**Stage A complete**, except the two-body data fix (Phase 2), which must land before Stage B.

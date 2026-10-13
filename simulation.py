@@ -89,7 +89,7 @@ def run_simulation(
     fired_down = np.zeros(n_shells, dtype=bool)
     fired_up = np.zeros(n_shells, dtype=bool)
     n_episodes = 0
-    older = None  # (time, s_min, state, accelerations), two substeps back
+    older = None  # (time, min_sep_now, state, accelerations), two substeps back
     middle = None  # one substep back, what we are capturing
     n_minima = 0
 
@@ -154,7 +154,7 @@ def run_simulation(
                     if min_sep_now >= shells[0]:
                         in_episode = False
 
-            # Three samples bracket a minimum when the middle beats both neigbours.
+            # Three samples bracket a minimum when the middle beats both neighbours.
             if record_events and older is not None and middle is not None:
                 t_mid, min_sep_mid, state_mid, a_mid = middle
                 if (min_sep_mid < event_factor * softening

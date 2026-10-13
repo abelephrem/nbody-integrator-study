@@ -177,9 +177,9 @@ Each stage lists: **physics/numerics focus**, **deliverable**, **validation buil
 - **Time estimate**: ~2–3 sessions (4–6 hrs)
 - **Questions addressed**: sets up G1–G5 — without graph construction there is no GNN to train. No question is answerable yet.
 - **Goal**: convert saved HDF5 simulation snapshots into graph-structured tensors suitable for GNN input.
-- **Deliverable**: a data loading pipeline that reads HDF5 trajectory files and produces per-snapshot graphs — node feature tensors (position, velocity, mass per particle), edge feature tensors (displacement vector, scalar distance per pair within a cutoff radius), dataset split into train/validation/test sets.
+- **Deliverable**: a data loading pipeline that reads HDF5 trajectory files and produces per-snapshot graphs — node feature tensor (mass per particle only; no position or velocity), edge feature tensors (displacement vector r_sender − r_receiver and scalar distance, for every ordered pair — fully connected, no cutoff radius), per-row time weights, dataset split into train/validation/test sets by whole file (208 / 36 / 36, plus 80 holdout files for G4). *(Updated 2026-10-13 to match the Stage A design decisions; originally position/velocity node features and a cutoff radius.)*
 - **Python skills**: PyTorch tensors and PyTorch Geometric data structures (both learned in context), HDF5 reading via `h5py`.
-- **Validation**: inspect a sample graph — correct node count, edge count for a given cutoff radius, feature dimensions match what the model will expect.
+- **Validation**: inspect a sample graph — N nodes, N×(N−1) edges, feature dimensions as expected; recompute each graph's acceleration from its edges and masses and match the stored target; time weights sum to the run length; split has no overlap and covers every setting combination.
 
 ### GNN Stage B — Model Architecture & Training
 - **Time estimate**: ~3–4 sessions (6–8 hrs) — the most conceptually dense GNN stage; come back to this Project if training misbehaves and the cause isn't obvious from the code
