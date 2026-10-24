@@ -1,4 +1,4 @@
-"""Initial condition scenarios — 2-body, figure-8, chaotic cluster."""
+﻿"""Initial condition scenarios — 2-body, figure-8, chaotic cluster."""
 import numpy as np
 import glob
 import h5py
@@ -10,6 +10,7 @@ import os
 from simulation import run_simulation, save_trajectory
 from integrators import leapfrog_step
 from time import perf_counter
+from functools import lru_cache
 
 
 # Sweep axis definitions (one-axis-at-a-time holdout design)
@@ -278,6 +279,37 @@ def resample_uniform(traj, n_keep):
     )
 
 
+@lru_cache(maxsize=None)
+def two_body_period(mass_ratio, G=1.0):
+    """Orbital period of a two_body's system in the dataset's units, from Kepler's third law."""
+    state = build_initial_state(TrajectoryConfig("two_body", {"e": 0.0, "mass_ratio": mass_ratio}, "train", 0))
+    M = state.masses.sum()  # total mass (1 after nondimensionalising)
+    r = state.positions[0] - state.positions[1]  # seperation vector
+    v = state.velocities[0] - state.velocities[1]  # relative velocity
+    E = 0.5 * (v @ v) - G * M / np.linalg.norm(r)  # orbital energy per reduced mass (<0 : bound)
+    a = -G * M / (2 * E)  # semi-major axis
+    return 2 * np.pi * np.sqrt(a**3 / (G * M))  #  Kepler's third law
+
+
+def two_body_duration(mass_ratio, ref_duration=20.0):
+    """Run length for a two-body file: the same NUMBER OF ORBITS as a mass-ratio-1 system
+    completes in ref_duration (about 25.5 orbits). Heavier systems orbit faster, so they run
+    for less time - e.g. mass ratio 15 runs for about 2.27 time units."""
+    return ref_duration * two_body_period(mass_ratio) / two_body_period(1) 
+
+
+def choose_dt(e, t_run=20.0, n_rows=200, k=4, dt_max=0.01):
+    """Outer step for a two_body run, so resample_true_anomaly has k stored steps between
+    neighbouring rows even at periapsis (where the orbit turns fastest).
+    """
+    avg_gap = t_run / n_rows  # avg time between saved rows
+    speedup = np.sqrt(1 + e) / (1 - e) ** 1.5  # periapsis angular speed / average angular speed
+    peri_gap = avg_gap / speedup  # time between rows at periapsis
+    dt = min(dt_max, peri_gap / k)  #  k stored steps per gap, never coarser than dt_max
+    n_steps = int(np.ceil(t_run / dt - 1e-9))  # whole number of steps (rounding up shrinks dt slightly)
+    return t_run / n_steps
+        
+
 def generate_dataset(configs, out_dir, duration=20.0, dt=0.01, n_keep=200, n_baseline=100,
                      softening=0.002, n_resolve=96, n_core=100, skip_existing=True):
     """Run every config through Leapfrog; save a tagged, resampled HDF5 trajectory each.
@@ -288,7 +320,6 @@ def generate_dataset(configs, out_dir, duration=20.0, dt=0.01, n_keep=200, n_bas
     """
     
     os.makedirs(out_dir, exist_ok=True)  # creates the output folder if it doesn't exist
-    n_steps = round(duration/dt)  # duration is in nondimensional time units
     for config in configs:
         path = os.path.join(out_dir, f"{config.scenario_type}_{config.seed:05d}.h5")
         if skip_existing and os.path.exists(path):
@@ -297,7 +328,17 @@ def generate_dataset(configs, out_dir, duration=20.0, dt=0.01, n_keep=200, n_bas
 
         t_run = perf_counter()
         state = build_initial_state(config)
-        traj = run_simulation(state, leapfrog_step, dt=dt, n_steps=n_steps, scenario_name=config.scenario_type, 
+        # run lasts a fixed number of orbits so every file gets the same rows per orbit 
+        # and the same angles per step at a given e, no matter the mass ratio
+        if config.scenario_type == "two_body":
+            n_steps = round(duration / choose_dt(config.params["e"], t_run=duration, n_rows=n_keep, dt_max=dt))
+            run_duration = two_body_duration(config.params["mass_ratio"], ref_duration=duration)
+            run_dt = run_duration / n_steps
+        else:
+            run_duration = duration
+            n_steps = round(duration / dt)
+            run_dt = dt
+        traj = run_simulation(state, leapfrog_step, dt=run_dt, n_steps=n_steps, scenario_name=config.scenario_type, 
                               G=1.0, softening=softening, adaptive=True,
                               n_resolve=n_resolve, record_events=True, n_core=n_core)
         events = traj.events  # captured before resampling, which selects checkpoints only
@@ -307,7 +348,7 @@ def generate_dataset(configs, out_dir, duration=20.0, dt=0.01, n_keep=200, n_bas
         elif config.scenario_type == "cluster":
             traj = resample_events(traj, n_baseline)
         else:
-            raise ValueError(f"unknown scensrio_type: {config.scenario_type}")
+            raise ValueError(f"unknown scenario_type: {config.scenario_type}")
         # Mid-substep encounter rows cannot be recovered by resampling - no checkpoint row
         # exists to select. Two-body never opens an episode (periapsis 0.1 vs a 3*eps
         # trigger), so this is a no-op there and needs no scenario branch.
@@ -317,8 +358,13 @@ def generate_dataset(configs, out_dir, duration=20.0, dt=0.01, n_keep=200, n_bas
             "scenario_type": config.scenario_type,
             "split": config.split,
             "seed": config.seed,
+            "duration": run_duration,  # stored run length - two_body files differ
             **config.params,  # spills in every key from params
         }
+        if config.scenario_type == "two_body":
+            traj.metadata["period"] = two_body_period(config.params["mass_ratio"])
+            traj.metadata["n_orbits"] = run_duration / traj.metadata["period"]   # ~25.5 for every two-body file
+
         save_trajectory(traj, path)
         print(f"{config.scenario_type}_{config.seed:05d} {perf_counter()-t_run:6.1f}s  "
               f"rows {len(traj.times):5d}  episodes {traj.metadata['n_episodes']:4d}  "
@@ -327,10 +373,16 @@ def generate_dataset(configs, out_dir, duration=20.0, dt=0.01, n_keep=200, n_bas
 
 
 def resample_true_anomaly(traj, n_keep):
-    """Select n_keep snapshots evenely spaced in true anomaly (two-body).
+    """Select n_keep snapshots evenly spaced in true anomaly (two-body).
     Denser near periapsis, at any eccentricity."""
     rel = traj.positions[:, 0, :] - traj.positions[:, 1, :]  # (T, 3) relative position
     vel = traj.velocities[:, 0, :] - traj.velocities[:, 1, :]  # (T, 3) relative velocity
+    # guard 1: np.unwrap assumes the orbit turns less than pi between stored steps
+    omega = np.linalg.norm(np.cross(rel, vel), axis=1) / np.sum(rel**2, axis=1)  # (T,) angular speed
+    step_angle = (omega[:-1] * np.diff(traj.times)).max()  # angle turned in a step - angular speed x step length
+    if step_angle >= np.pi / 2:
+        raise ValueError(f"orbit turns {step_angle:.2f} rad between stored steps (limit pi/2): "
+                         "outer dt too coarse for true-anomaly resampling - see choose_dt")
 
     u = rel[0] / np.linalg.norm(rel[0])  # periapsis unit vector (orbit starts here)
     w = np.cross(rel[0], vel[0])
@@ -343,7 +395,10 @@ def resample_true_anomaly(traj, n_keep):
     grid = np.linspace(theta[0], theta[-1], n_keep)
     idx = np.searchsorted(theta, grid)  # returns the thetas we want, orders them correctly
     idx = np.clip(idx, 0, len(theta) - 1)  # makes sure the last theta safely maps to the final real timestep
-    
+    # guard 2: two target angles mapepd to the same stored step = a duplicate row
+    if len(np.unique(idx)) < len(idx):
+        raise ValueError(f"{len(idx) - len(np.unique(idx))} target angles share a stored step "
+                         "(would save duplicate rows) - outer dt too coarse, see choose_dt")
     return replace(traj, positions=traj.positions[idx], velocities=traj.velocities[idx], accelerations=traj.accelerations[idx], times=traj.times[idx])
 
 
@@ -371,7 +426,7 @@ def resample_events(traj, n_baseline, event_factor=3.0):
     return replace(traj, positions=traj.positions[idx], velocities=traj.velocities[idx], accelerations=traj.accelerations[idx], times=traj.times[idx])
 
 
-def validate_dataset(directory, energy_tol=1e-4, cluster_energy_tol=1e-2, param_rtol=0.05):
+def validate_dataset(directory, energy_tol=1e-4, cluster_energy_tol=1e-2, param_rtol=0.05, duration=20.0, max_gap_factor=8.0):  # 8.0: worst of all 100 option-D files is 6.8x (mass ratio 15, precession)
     """Sanity-check a generated dataset. Returns a list of human_readable problem
     strings - an empty list means every file passed.
 
@@ -396,8 +451,39 @@ def validate_dataset(directory, energy_tol=1e-4, cluster_energy_tol=1e-2, param_
             masses = f["masses"][:]
             G = f.attrs["G"]
             softening = f.attrs["epsilon"]
+            times = f["times"][:]
             tags = {k:f.attrs[k] for k in f.attrs}  # all metadata into a plain Python dict
         name = os.path.basename(path)  # just the filename, for readable messages
+        
+        # two-body files run for a fixed number of orbits so each stores its own run length
+        # files without the attribute (clusters) fall back to 'duration'
+        expected = float(tags.get("duration", duration))
+        gaps = np.diff(times)
+        if not np.all(gaps > 0):
+            issues.append(f"{name}: times not strictly increasing ({np.sum(gaps <= 0)} bad gaps)")
+        if np.any(np.all(positions[1:] == positions[:-1], axis=(1, 2))):
+            issues.append(f"{name}: duplicate rows (identical consecutive positions)")
+        if times[0] != 0.0 or not np.isclose(times[-1], expected, rtol=0, atol=1e-9):
+            issues.append(f"{name}: runs t = {times[0]} -> {times[-1]}, expected 0 -> {expected}")
+        w = np.zeros(len(times))               # time weights - same trapezoid rule as gnn/graph_data.py
+        w[:-1] += gaps / 2
+        w[1:] += gaps / 2
+        if not np.all(w > 0) or not np.isclose(w.sum(), expected, rtol=0, atol=1e-9):
+            issues.append(f"{name}: time weights not all positive / don't sum to {expected}")
+
+
+        if tags["scenario_type"] == "two_body":
+            rel = positions[:, 0] - positions[:, 1]  # separation at every row
+            vel = velocities[:, 0] - velocities[:, 1]
+            u = rel[0] / np.linalg.norm(rel[0])  # periapsis direction (runs start there)
+            n_hat = np.cross(rel[0], vel[0])
+            n_hat = n_hat / np.linalg.norm(n_hat)  # orbit normal
+            p = np.cross(n_hat, u)  # in-plane axis at 90 degrees to u
+            phase = np.sort(np.mod(np.arctan2(rel @ p, rel @ u), 2 * np.pi))   # angle of each row, 0..2pi
+            biggest = np.diff(np.append(phase, phase[0] + 2 * np.pi)).max()    # largest gap, incl. wrap from last to first
+            limit = max_gap_factor * 2 * np.pi / len(phase)  # 8x a perfectly even gap (scales with row count)
+            if biggest > limit:  # rows bunch up somewhere on the orbit
+                issues.append(f"{name}: largest gap in orbital phase {biggest:.3f} rad exceeds {limit:.3f}")
 
         if not np.all(np.isfinite(positions)):
             issues.append(f"{name}: non-finite positions (trajectory blew up)")

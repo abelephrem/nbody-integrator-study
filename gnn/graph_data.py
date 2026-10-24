@@ -24,17 +24,18 @@ def complete_edge_index(N: int) -> torch.Tensor:
 def time_weights(times: torch.Tensor) -> torch.Tensor:
     """How much time each row represents (trapezoidal-rule weights).
     
-    Each row gets half the gap to the previous row plus half the gap to the next row; the first and last rows only get one half.
-    The weights add up to times[-1] - times[0].
-    
-    Example: times [0, 1, 3, 4] -> weights [0.5, 1.5, 1.5, 0.5], total 4.
+    The weights are normalised by the run length, so they add up to 1 for every file.
+
+    Example: times [0, 10, 30, 60, 100] -> weights [0.05, 0.15, 0.25, 0.35, 0.20], total 1.
+
     """
 
     gaps = times[1:] - times[:-1]  # (T-1,) gap between each row and the next
     w = torch.zeros_like(times)  # (T,), all zeros, same shape and dtype as times
     w[:-1] += gaps / 2  # half of each gap to the row on its left (the last row gets none)
     w[1:] += gaps / 2  # half of each gap to the row on its right (the first row gets none)
-    return w
+    return w / (times[-1] - times[0])  # divide by run length -> share of the run; every file sums to 1
+
 
 
 def read_rows(path: str):
@@ -44,10 +45,8 @@ def read_rows(path: str):
         pos = torch.from_numpy(f["positions"][:])  # (T, N, 3)
         acc = torch.from_numpy(f["accelerations"][:])  # (T, N, 3)
         times = torch.from_numpy(f["times"][:])  # (T,)
-    # TEMPORARY
-    keep = torch.ones(len(times), dtype=torch.bool)  # start by keeping every row
-    keep[1:] = times[1:] != times[:-1]  # drop a row whose time repeats the one before
-    return masses, pos[keep], acc[keep], times[keep]
+    assert (times[1:] > times[:-1]).all(), f"{path}: times not strictly increasing"  # dataset is clean; fail loudly if not
+    return masses, pos, acc, times  # rows exactly as stored
 
 
 def file_to_graphs(path: str) -> list[Data]:

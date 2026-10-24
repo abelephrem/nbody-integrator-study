@@ -9,11 +9,6 @@ from gnn.graph_data import complete_edge_index, time_weights, read_rows, file_to
 from gnn.split import DATA_DIR
 
 
-# TEMPORARY - remove once the two-body files are regenerated (Phase 2).
-# These five e = 0.8 two-body files end at t = 19.83 instead of 20: resample_true_anomaly
-# cannot track the orbit at periapsis when picking from stored steps at dt = 0.01.
-# Named explicitly (not a looser tolerance) so that any OTHER short file still fails.
-KNOWN_SHORT_FILES = {f"two_body_{i:05d}.h5" for i in range(75, 80)}
 SAMPLE_FILES = ["two_body_00000.h5", "two_body_00075.h5", "cluster_01000.h5", "cluster_01160.h5"]
 
 @pytest.fixture(scope="module")
@@ -118,7 +113,7 @@ def test_time_weights_worked_example():
     w = time_weights(times)
 
     # assert - each row gets half the gap on each side; end rows get one half
-    expected = torch.tensor([5., 15., 25., 35., 20.])
+    expected = torch.tensor([0.05, 0.15, 0.25, 0.35, 0.20])  # 5, 15, 25, 35, 20 divided by the run length 100
     assert torch.allclose(w, expected) # floats, so allow rounding differences
 
 
@@ -136,6 +131,4 @@ def test_time_weights_every_file():
         # assert - every row owns some time (so timestamps are unique and increasing),
         # and the weights and up to the full run length of 20
         assert (w > 0).all(), path
-        if os.path.basename(path) in KNOWN_SHORT_FILES:
-            continue  # ends at 19.83 -  see KNOWN_SHORT_FILES
-        assert abs(w.sum().item() - 20.0) < 1e-9, path
+        assert abs(w.sum().item() - 1.0) < 1e-9, path  # normalised: every file sums to 1

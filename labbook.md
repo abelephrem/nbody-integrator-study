@@ -861,3 +861,60 @@ generator, final training dataset regenerated and verified. Ready for GNN Stage 
 
 ### State
 **Stage A complete**, except the two-body data fix (Phase 2), which must land before Stage B.
+
+## 2026-10-24 — Two-body dataset fix (pre-Stage B): orbit-based run length
+
+### Why
+Stage A tests found duplicate rows in the e ≥ 0.8 two-body files (20 train + 5 holdout), and 5
+files ending at t = 19.83. Cause: `resample_true_anomaly` picks rows from stored outer steps at
+dt = 0.01, too coarse at periapsis (up to 6.3 rad per step). Accelerations were always exact.
+
+### What changed
+- `choose_dt(e)`: step count per e so that ≥ 4 stored steps fall between neighbouring rows at
+  periapsis (k = 4), rounded so steps × dt divides the run exactly.
+- First attempt (fixed 20-unit runs, dt from e only) stopped at two_body_00095 (e = 0.4, mr = 15):
+  guard 1 fired at 1.76 rad/step. "dt depends only on e" holds for duplicates but not for angle
+  tracking: orbit count depends on mass ratio (25.5 orbits at mr = 1, 224 at mr = 15), which also
+  gave as few as 0.89 rows per orbit.
+- **Two-body runs now last a fixed number of orbits, not a fixed time:** 80/π ≈ 25.46 orbits,
+  which is what mass ratio 1 completes in 20 units. `two_body_period(mr)` gives the period in
+  dataset units (Kepler, from one fixed reference state per mass ratio), and
+  `two_body_duration(mr)` the run length. dt = run length / step count. Units are unchanged:
+  only run lengths differ (20 at mr = 1 down to 2.27 at mr = 15). Each file stores `duration`,
+  `period` and `n_orbits`.
+- Guards in `resample_true_anomaly`: (1) angle per stored step ≥ π/2 → error (protects
+  np.unwrap); (2) any stored step picked twice → error (catches duplicates directly; guard 1
+  alone misses e.g. 1.2 rad/step with 0.79 rad row spacing).
+- `validate_dataset` now also checks: strictly increasing times, no duplicate rows, exact
+  0 → stored duration, positive time weights, and phase coverage (largest gap in orbital
+  angle ≤ 8 × the even gap 2π/rows).
+- `time_weights` normalised by run length: every file sums to 1, so files still count equally
+  despite different run lengths. Clusters included.
+- `read_rows`: temporary de-duplication replaced by an assert.
+
+### Result
+- All 100 two-body files regenerated (43 min): 25.46 orbits, 7.85 rows/orbit, 0.80 rad row
+  spacing in every file; angle per step depends only on e (0.08 / 0.12 / 0.20 rad).
+- mr = 1 files identical bit for bit to the first attempt's versions (30/30); e = 0 / 0.2 at
+  mr = 1 identical to the original dataset (10/10).
+- Clusters untouched: 0/260 modified since 09-24; energy metric matches the Stage 8 record
+  (results/energy_metric_diagnostic.csv) to its 6-figure rounding. (The pre-swap checksum list
+  was lost from the temp folder, so these two checks replaced it.)
+- validate_dataset on all 360: only the 3 known cluster energy flags. Full suite: 64 pass.
+- Old two-body files backed up in C:/nbody_data_twobody_old.
+
+### Found along the way
+- At high mass ratio the orbit sits close to the softening scale (mr = 15: closest approach
+  17.6 ε, against 75 ε at mr = 1), so the softened force precesses the orbit (≈ −23° over the
+  run) and it completes 25.31 orbits, not 25.46. This raised its coverage gap to 6.8× even;
+  the factor was re-set from 6 to 8 using all 100 files. Note for G4: the mr = 15 holdout
+  orbits are not quite Keplerian.
+- My first coverage threshold (fixed 0.2 rad) was wrong for files with fewer rows; it now
+  scales with the row count.
+
+### Open / for later
+- Stage B: the time weights are now ~20× smaller in scale. Divide by the total weight in the
+  loss (or the effective learning rate changes).
+- G2/G4 rollouts: compare against fresh full-resolution Leapfrog runs from the same initial
+  state, not against the 200 stored rows (Project note).
+- Delete C:/nbody_data_twobody_D, _new and (once Stage B is happy) _old.

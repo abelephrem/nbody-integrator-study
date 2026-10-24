@@ -1,8 +1,9 @@
 import numpy as np
+import pytest
 from scenarios import (two_body_circular, two_body_eccentric, figure_eight, chaotic_cluster, 
                        virial_radius, nondimensionalise, cluster_configs, random_orientation, build_initial_state, N_TRAINED, 
                        RATIO_TRAINED, N_BASELINE, RATIO_BASELINE, TrajectoryConfig, resample_uniform, two_body_configs, generate_dataset, resample_true_anomaly,
-                       resample_events, validate_dataset)
+                       resample_events, validate_dataset, choose_dt)
 from simulation import run_simulation
 from integrators import leapfrog_step
 from analysis import total_energy
@@ -167,5 +168,39 @@ def test_events_capture_close_encounters():
 def test_validate_dataset_clean(tmp_path):
     configs = cluster_configs(n_draws=1)[:3] + two_body_configs(n_orient=1)[:3]
     generate_dataset(configs, tmp_path, duration=5.0, dt=1e-3, softening=0.05, n_keep=50, n_baseline=30)
-    issues = validate_dataset(tmp_path)
+    issues = validate_dataset(tmp_path, duration=5.0)
     assert issues == [], f"dataset issues: {issues}"
+
+
+def _run_two_body(e, mass_ratio, dt, duration=2.0):
+    """A short two-body run with the same settings generate_dataset uses."""
+    state = build_initial_state(TrajectoryConfig("two_body", {"e": e, "mass_ratio": mass_ratio}, "train", 0))
+    return run_simulation(state, leapfrog_step, dt=dt, n_steps=round(duration / dt), scenario_name="two_body",
+                          G=1.0, softening=0.002, adaptive=True, n_resolve=96, n_core=100)
+
+
+@pytest.mark.parametrize("e, mr", [(0.8, 1), (0.8, 10), (0.9, 1), (0.9, 10)])
+def test_true_anomaly_clean_at_production_settings(e, mr):
+    # arrange - the most eccentric settings, dt from choose_dt. 2 time units with 20 rows keeps
+    # the production time per row (0.1), so choose_dt gives the same dt as the real dataset.
+    dt = choose_dt(e, t_run=2.0, n_rows=20)
+    traj = _run_two_body(e, mr, dt)
+
+    # act
+    r = resample_true_anomaly(traj, 20)
+
+    # assert - strictly increasing times, no duplicate rows, run ends exactly at t = 2
+    assert (np.diff(r.times) > 0).all()
+    assert len(np.unique(r.times)) == 20
+    assert r.times[-1] == pytest.approx(2.0)
+
+
+@pytest.mark.parametrize("mr, which", [(1, "share a stored step"),     # guard 2: 1.2 rad/step, under pi/2
+                                       (10, "orbit turns")])          # guard 1: 6.3 rad/step
+def test_true_anomaly_guards_reject_old_dt(mr, which):
+    # arrange - the setting that produced the duplicate rows: e = 0.8 at dt = 0.01
+    traj = _run_two_body(0.8, mr, 0.01)
+
+    # act / assert - resampling must refuse, and with the guard we expect
+    with pytest.raises(ValueError, match=which):
+        resample_true_anomaly(traj, 20)
