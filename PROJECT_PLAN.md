@@ -41,11 +41,11 @@ The justification needs stating precisely, because the obvious version of it is 
 
 | # | Question | What you measure |
 |---|----------|-------------------|
-| G1 | Does the GNN learn to predict per-particle accelerations accurately? | MSE between predicted and true accelerations on a held-out test set |
+| G1 | Does the GNN learn to predict per-particle accelerations accurately? | Relative acceleration error by decade of \|a\| on the held-out test set, against the zero-prediction baseline (error 1) |
 | G2 | When the trained GNN is rolled out autonomously, how does trajectory error grow over time? | Position error vs time, compared against Leapfrog ground truth |
-| G3 | Does the GNN rollout conserve energy and angular momentum comparably to Leapfrog? | ΔE/E₀ and ΔL/L₀ vs time — GNN alongside Leapfrog and RK4 on the same axes |
+| G3 | Does the GNN rollout conserve energy and angular momentum comparably to Leapfrog? | ΔE/E₀ and ΔL/L₀ vs time — GNN alongside Leapfrog and RK4 on the same axes. Design 3 (Newton's third law built in) conserves momentum and angular momentum by construction, so for it ΔL is a check, not a finding; energy remains a genuine test |
 | G4 | Does the model generalise to initial conditions it was not trained on? | Rollout error on out-of-distribution initial conditions vs in-distribution |
-| G5 | What is the speed vs accuracy trade-off across all methods? | Wall-clock time vs trajectory error — all integrators and GNN on shared axes |
+| G5 | What is the speed vs accuracy trade-off across all methods? | Wall-clock time vs trajectory error — all integrators and GNN on shared axes. The GNN is expected to be *slower* than direct integration here (the force law is cheap, step count is the same); framed as "when do learned surrogates pay off", not as a speed claim |
 
 G1 is the training validation: it tells you the model learned something. G2 and G3 are the physically meaningful tests — a model that predicts accelerations well locally can still accumulate catastrophic error over long rollouts, and energy conservation is the physics check. G4 tests whether the model learned the underlying rule or merely memorised training cases. G5 is the "so what" — the whole point of a surrogate is speed, so the trade-off must be quantified.
 
@@ -65,7 +65,7 @@ This is the analysis machinery that turns simulation and training output into ev
 - **Compute cost**: wall-clock time or step count, paired with achieved accuracy
 
 **GNN-specific metrics (computed during GNN Stages A–C):**
-- **Acceleration MSE**: mean squared error between GNN-predicted and true per-particle accelerations on the held-out test set (G1)
+- **Relative acceleration error by decade of |a|**: median and 90th percentile of |â − a| / |a| per decade, two-body and clusters separately, against the zero-prediction baseline (G1)
 - **Rollout position error**: deviation of GNN-generated trajectory from Leapfrog ground truth at matching timestamps (G2)
 - **GNN energy and angular momentum drift**: same formulas as core metrics above, applied to GNN rollout trajectories (G3)
 - **Generalisation gap**: difference in rollout error between in-distribution and out-of-distribution initial conditions (G4)
@@ -183,17 +183,17 @@ Each stage lists: **physics/numerics focus**, **deliverable**, **validation buil
 
 ### GNN Stage B — Model Architecture & Training
 - **Time estimate**: ~3–4 sessions (6–8 hrs) — the most conceptually dense GNN stage; come back to this Project if training misbehaves and the cause isn't obvious from the code
-- **Questions addressed**: **G1** — acceleration MSE on the held-out test set is measurable at the end of this stage.
+- **Questions addressed**: **G1** — relative acceleration error by decade of |a| on the held-out test set is measurable at the end of this stage.
 - **Goal**: implement a message-passing GNN that predicts per-particle accelerations from the current graph state, and train it on the Leapfrog-generated dataset.
-- **Deliverable**: GNN model using PyTorch Geometric message passing, training loop with train/validation loss curves, saved model weights, G1 measurement (acceleration MSE on test set versus a naive baseline).
+- **Deliverable**: one PyTorch Geometric message-passing model with a `design` switch (1 free vector, 2 strength × direction, 3 + Newton's third law; one round, sum aggregation, no decoder), trained once each with the kick-weighted relative loss (kick weights normalised per file so every file counts equally; F = 2e-3); training loop with train/validation loss curves and best-validation checkpoints; one evaluation script producing the summary table (median / p90 relative error, direction error, R_p, R_L, law-recovery exponents α, β) and the per-decade relative-error plot with one line per design. Design decisions: labbook 2026-10-25.
 - **Python skills**: PyTorch Geometric message passing layer, training loops, loss functions, model checkpointing (all learned in context).
-- **Validation**: training loss should decrease and validation loss should track it without divergence. G1 MSE should be meaningfully below a naive baseline (e.g. predicting zero acceleration for all particles). If training is unstable, come back to this Project to interpret what it means before debugging in VS Code.
+- **Validation**: training loss should decrease and validation loss should track it without divergence. G1 relative error should be well below the zero-prediction baseline (relative error 1) in every decade above F. If training is unstable, come back to this Project to interpret what it means before debugging in VS Code.
 
 ### GNN Stage C — Rollout Validation & Unified Comparison
 - **Time estimate**: ~2–3 sessions (4–6 hrs)
 - **Questions addressed**: **G2, G3, G4, G5** — all answered here. This is also where the unified comparison table (Euler, Leapfrog, RK4, GNN) is completed and the primary research question is answered.
 - **Goal**: couple the trained GNN to the existing integrator and run autonomous rollouts; validate against Leapfrog ground truth; produce the unified comparison across all methods.
-- **Deliverable**: GNN rollout script that feeds GNN-predicted accelerations into the Stage 3 integrator; G2 position error vs time plot; G3 energy and angular momentum drift vs time (GNN alongside Leapfrog and RK4 on shared axes); G4 generalisation test on unseen initial conditions; G5 wall-clock time vs trajectory error plot (all integrators plus GNN as a single point); completed unified comparison table; animated comparison of GNN rollout vs Leapfrog ground truth from identical initial conditions (bodies moving in real time, both trajectories overlaid), saved as `.mp4`. This animation — two trajectories starting identical and potentially diverging over time — directly visualises G2 and is the strongest single portfolio asset in the project.
+- **Deliverable**: GNN rollout script that feeds GNN-predicted accelerations into the Stage 3 integrator; G2 position error vs time plot; G3 energy and angular momentum drift vs time (GNN alongside Leapfrog and RK4 on shared axes); G4 generalisation test on unseen initial conditions; G5 wall-clock time vs trajectory error plot (all integrators plus GNN as a single point); completed unified comparison table; one time-weighted Design 1 run (also normalised per file) as the standard baseline, compared against the kick-weighted runs by rollout; animated comparison of GNN rollout vs Leapfrog ground truth from identical initial conditions (bodies moving in real time, both trajectories overlaid), saved as `.mp4`. This animation — two trajectories starting identical and potentially diverging over time — directly visualises G2 and is the strongest single portfolio asset in the project.
 - **Python skills**: coupling model inference to the existing simulation loop, benchmarking wall-clock time.
 - **Validation**: G3 energy drift should fall somewhere between Leapfrog and random. If the GNN rollout conserves energy nearly as well as Leapfrog without being explicitly told to, that is a strong positive result. If not, that is an honest finding worth reporting — not a bug to fix.
 

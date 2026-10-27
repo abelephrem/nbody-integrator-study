@@ -918,3 +918,155 @@ dt = 0.01, too coarse at periapsis (up to 6.3 rad per step). Accelerations were 
 - G2/G4 rollouts: compare against fresh full-resolution Leapfrog runs from the same initial
   state, not against the 200 stored rows (Project note).
 - Delete C:/nbody_data_twobody_D, _new and (once Stage B is happy) _old.
+
+## 2026-10-25 — GNN Stage B pre-work: design decisions
+
+Settled in the Project before coding. Time-constrained: keep training runs to a minimum.
+
+### Decisions
+
+**1. Message passing: 1 round.**
+- Graph is fully connected, so every body hears every other body directly; nothing needs to hop.
+- Gravity is purely pairwise (no three-body terms), so extra rounds add only what the physics doesn't have
+  (risk of spurious shortcuts that hurt G4, and messages stop being readable as pulls).
+- **No decoder**: acceleration = sum of incoming messages. A learned decoder would bend the sum and
+  break superposition. Aggregation = **sum** (not mean).
+
+**2. Message design: ladder 1 → 2 → 3, built as ONE model with a `design=1/2/3` switch.**
+Each step adds exactly one physics assumption. All three build in structure, not the law:
+the network still has to learn 1/r² and the mass dependence (Stage A Option A still holds).
+
+| Design | Message from j to receiver i | MLP inputs | Built in |
+|---|---|---|---|
+| 1 free vector | MLP output (3 numbers) | m_j, disp (3), dist, log dist | nothing beyond pairs + sum |
+| 2 strength × direction | exp(s) · d̂, with d̂ = disp / dist | m_j, log dist → s (1 number) | force along the line between bodies |
+| 3 + third law | exp(s) / m_i · d̂ | inputs **symmetric under swapping i and j** (e.g. m_i·m_j, m_i + m_j, log dist) → s | + equal and opposite (Newton 3) |
+
+- disp = r_sender − r_receiver points from receiver to sender, so d̂ is attractive as written.
+- Design 3: because s is identical for both directions of a pair and d̂ flips sign,
+  m_i a_i(from j) = −m_j a_j(from i) exactly. Momentum and angular momentum then conserved to round-off
+  **by construction**: G3's L result becomes a check, not a finding (energy is still a genuine test).
+- Design 3 needs the receiver's mass m_i (from `x[edge_index[1]]`).
+
+**3. Row weighting: kick, normalised per file.** (Revised after the step-1 check below.)
+- Per body-row: raw w = |a_i| × w_time (the stored time weight).
+- Then **divide by the file's total over all body-rows**, so every file sums to 1.
+  (Sum over body-rows, not per row: otherwise clusters gain weight just for having more bodies.)
+- Two jobs, two levels:
+  - Between files: every file counts equally (the Stage A principle). Two-body share = 48/208 = 23%.
+  - Within a file: kick decides which rows and bodies matter.
+- Why kick within a file: an acceleration error acting for Δt gives a velocity error ≈ (relative error) × |a| Δt,
+  so the loss roughly tracks the velocity error a rollout would pick up, as a fraction of that trajectory's
+  own total velocity change (scale-free across files).
+- Why per-file normalisation: the kick argument justifies weighting within a trajectory, not across
+  trajectories with different velocity scales. Un-normalised kick gave two-body only 1.2% of the loss
+  (step-1 check), an accident of units.
+- Not a standard named technique; project-specific, built from standard importance-weighting ideas.
+- **Stage C (planned, not optional):** one time-weighted Design 1 run as the standard baseline, also
+  normalised per file over body-rows, so the comparison isolates only the within-file distribution.
+
+**4. Loss floor: F = 2e-3, no sweep.**
+- Cautious end of the Stage A range (F ≤ 0.1·|a_esc|/ρ, ρ = 1e-2). With kick weighting, escapers already
+  carry tiny weight, so a sweep would show almost nothing.
+- Cheap check: fraction of bodies, and of total kick weight, with |a| < F.
+- G4 note: holdout escapers go down to 1.6e-4, so the condition is just short of met for the slowest holdout bodies.
+- Step-1 check: 7.1% of body-rows have |a| < F but carry 6e-8 of the kick weight. Closed; kept for numerical
+  safety. Consequence: the lowest |a| decades are effectively untrained, so G1 will show poor relative error
+  there. Expected under kick weighting, not a bug; note it beside the per-decade plot.
+
+**5. Loss normalised by total weight in the batch** (time weights are ~20× smaller since the 10-24 fix).
+
+  loss = Σ w_i · |â_i − a_i|² / max(|a_i|, F)²  /  Σ w_i
+
+**6. Step-size floor: closed, unchanged.** It affects trajectory accuracy (which states are visited),
+not label correctness. Stage C compares against fresh full-resolution Leapfrog runs anyway.
+
+**7. Activation: SiLU for all three designs** (no ReLU comparison run).
+- Design 3's learned force is conservative by construction; SiLU keeps its learned potential smooth,
+  which Leapfrog's bounded-energy-error property assumes. ReLU kinks would leave that unproven.
+- Designs 1 and 2 are not conservative, so for them it only affects fit quality.
+- Not tanh: it saturates, so the force stops decaying outside the training range (bad for G4).
+- Refs: Sanchez-Gonzalez 2020 (GNS, ReLU); NequIP, MACE (SiLU); Elfwing 2018 (SiLU).
+
+**8. Training length: 100 epochs for all, then a doubling test.**
+- Compare best achievable accuracy, not equal effort (G5 is about rollout time, not training time).
+- Decay flattens curves whatever the budget, so "levelled off" alone is weak. Rerun Design 3 only at
+  200 epochs (from scratch); test per-decade median errors within ~20% → 100 is enough; clearly better
+  → rerun all three at 200.
+- Report final-epoch weights; also evaluate the best-val checkpoint (a big gap = val noise steering selection).
+- Design 1 input standardisation (Project suggestion): rejected. Design 1 likely not used; if reported,
+  note its result mixes missing structure with badly scaled raw inputs (disp up to ~60, dist 2e-4 to 75).
+
+**9. LR decay: Adam, exponential, 10× over the run (1e-3 → 1e-4), tied to n_epochs, same for all.**
+- Batch noise: 512 graphs × n_eff/n 0.055 ≈ 28 effective examples per batch; constant lr bounces
+  in a region that scales with lr. Adam makes decay more necessary (steps stay ~lr near the minimum).
+- Tied to n_epochs so the doubling test changes one thing only. Save n_epochs with every model.
+- Refs: Bottou, Curtis & Nocedal 2018; Kingma & Ba 2015.
+
+**10. Gradient clipping: adaptive, threshold = 10 × median step size of the last 100 steps, all designs.**
+- Without clipping Design 3's loss collapsed repeatedly; cause = rare gradient spikes (~750× the median).
+- A fixed threshold (1.0) sat at the median and clipped ~half of all steps (acted as a smaller lr).
+  Step sizes drift as training progresses, so a fixed number stops meaning "outlier".
+- Median (not mean ± std): one spike inflates the std and blinds the threshold; the median ignores it.
+  Normal steps ≤ ~12× median, spikes hundreds ×, so 10× separates them. Log steps clipped per epoch.
+- Ref: Pascanu, Mikolov & Bengio 2013 (gradient norm clipping).
+
+**11. Mass inputs: log masses, all three designs.**
+- Design 1: log m_j; Design 2: log m_j; Design 3: log m_i + log m_j, log(m_i + m_j) (still i ↔ j symmetric).
+- Consistent with log dist; matches the law-recovery fit; a holdout mass outside the training range
+  extrapolates as a continued power law (G4). Slopes still learned. Gain for G1 likely small (masses
+  span ~1.2 decades) — reasons are consistency, interpretability, G4.
+- Design 1 gets log m_j too: each ladder step should change only the output structure.
+- Law check: log|message| = α log m_j + β log r + c (α = 1, β = −2), in plain log units. Optional for
+  Design 3: fit s against log(m_i m_j), log(m_i + m_j), log r → 1, 0, −2.
+
+**12. Input standardisation: all inputs, all designs, statistics from the training set.**
+- After the logs, z-score each input: (x − mean) / std. Same treatment in every design, so the ladder
+  changes only the output structure. Removes Design 1's input-scale confound (supersedes the rejection in 8).
+- disp (Design 1): no shift, one shared scale for x, y, z — keeps sign symmetry and directions exact.
+- Stats stored in the model (buffers), reused unchanged for val, test and Stage C rollouts (no leakage).
+- Lossless shift-and-stretch: changes how easily the model learns, not what it can represent.
+
+### Run plan (keep it small)
+- 1 seed per design. Add seeds only if two designs land within ~2× of each other.
+- Same split, loss, F, weighting, MLP size, optimiser and epochs for all three designs.
+- Starting settings (tune in VS Code if needed): MLPs 2 hidden layers × 128, Adam lr 1e-3 with slow decay,
+  keep best-validation weights.
+- Batch size: largish (e.g. 512 graphs), because the weights are uneven.
+  No cap on per-row weight (it would change the objective). Switch to weighted sampling
+  (rows drawn with probability ∝ weight) only if the training loss is visibly jumpy.
+- Total: ~3 training runs in Stage B.
+
+### Evaluation — one script, run on every model, on the test set
+1. **Relative error by decade of |a|**: median and 90th percentile per bin, two-body and clusters separately.
+   Zero-prediction baseline = 1 everywhere above F. Plot: one line per design. (Headline figure.)
+2. **Direction error**: angle between â and a.
+3. **Single-step conservation** (outputs only, works for all designs):
+   - R_p = |Σ m_i â_i| / Σ m_i |â_i|
+   - R_L = |Σ m_i r_i × â_i| / Σ m_i |r_i × â_i|, positions about the centre of mass
+   - Design 3 must be at float32 round-off (~1e-7); if not, it's a bug.
+4. **Law recovery** (pairs with r ≫ ε, e.g. r > 10ε): fit log|message| = α log m_j + β log r + c.
+   Target α = 1, β = −2. For Design 1 use the message vector's length.
+5. Output one row of the summary table:
+
+| Design | Median rel. error | p90 (worst decade) | Direction error | R_p | R_L | α | β |
+|---|---|---|---|---|---|---|---|
+
+### Order of work in Claude Code
+1. Weight checks: kick spread (row + file), fraction below F. No training. **Done 2026-10-25**;
+   led to per-file normalisation. Recompute n_eff and type shares after normalising.
+   (Two-body vs cluster coverage check dropped: only a diagnostic if G1 two-body error comes out poor.)
+2. Model with `design` switch + tests: output shapes; Design 2 messages parallel to disp;
+   Design 3 R_p ≈ 0 on random inputs; zero model gives relative error 1.
+3. Training loop with weighted, normalised loss and best-val checkpoint.
+4. Evaluation script (items 1–5 above).
+5. Train Design 1 → 2 → 3.
+6. Bring the summary table and per-decade plot back to the Project to interpret.
+
+### Plan updates made (PROJECT_PLAN.md)
+- G1: "MSE" → relative error by decade of |a| vs the zero baseline (matches the Stage A loss).
+- Stage B deliverable: three designs, summary table, per-decade plot.
+- G3: note that Design 3 conserves momentum and angular momentum by construction.
+- G5: GNN expected to be slower than direct integration (cheap force law, same step count);
+  frame as "when do learned surrogates pay off", not as a speed claim.
+- Stage C: add the time-weighted Design 1 baseline run.
