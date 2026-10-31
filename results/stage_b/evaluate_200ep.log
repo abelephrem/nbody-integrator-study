@@ -1,0 +1,7 @@
+﻿design 1 final  median rel 0.997  angle 29.2 deg  R_p 0.75  alpha 1.077  beta -1.113
+design 1 best   median rel 1  angle 55 deg  R_p 0.36  alpha 0.370  beta -0.569
+design 2 final  median rel 0.00594  angle 0.0178 deg  R_p 0.0003  alpha 0.931  beta -2.102
+design 2 best   median rel 0.00555  angle 0.0174 deg  R_p 4e-05  alpha 0.929  beta -2.102
+design 3 final  median rel 0.0062  angle 0.0236 deg  R_p 3.2e-08  alpha 1.022  beta -1.905
+design 3 best   median rel 0.0062  angle 0.0236 deg  R_p 3.2e-08  alpha 1.022  beta -1.905
+saved results\stage_b\summary.csv and figures/stage_b_per_decade.png

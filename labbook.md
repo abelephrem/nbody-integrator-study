@@ -994,6 +994,10 @@ not label correctness. Stage C compares against fresh full-resolution Leapfrog r
   200 epochs (from scratch); test per-decade median errors within ~20% → 100 is enough; clearly better
   → rerun all three at 200.
 - Report final-epoch weights; also evaluate the best-val checkpoint (a big gap = val noise steering selection).
+- Doubling-test rule (fixed before the result): per decade fully above F with ≥ 3 files, two-body and clusters,
+  ratio = median rel. error at 100 / at 200 epochs. A decade is "clearly better" at 200 only if ratio > 1.25
+  AND the 200-epoch bootstrap band lies entirely below the 100-epoch band. None → 100 enough; more than half
+  → rerun all at 200; otherwise report and decide with the Project.
 - Design 1 input standardisation (Project suggestion): rejected. Design 1 likely not used; if reported,
   note its result mixes missing structure with badly scaled raw inputs (disp up to ~60, dist 2e-4 to 75).
 
@@ -1026,6 +1030,20 @@ not label correctness. Stage C compares against fresh full-resolution Leapfrog r
 - disp (Design 1): no shift, one shared scale for x, y, z — keeps sign symmetry and directions exact.
 - Stats stored in the model (buffers), reused unchanged for val, test and Stage C rollouts (no leakage).
 - Lossless shift-and-stretch: changes how easily the model learns, not what it can represent.
+
+**Evaluation decisions (E1–E5), test split only.**
+- E1 per-decade error: bins one decade of |a| wide; unweighted median and p90; region below F shaded,
+  not dropped; 95% error bars by bootstrap over whole test files (1000 resamples; files, not rows,
+  because rows within a trajectory are correlated); bins drawing on < 3 files hidden.
+- E2 direction error: angle = atan2(|â × a|, â · a) (accurate at small angles, unlike arccos);
+  median/p90 in the table plus a per-decade panel; bodies below F excluded from the table.
+- E3 conservation: R_p and R_L per snapshot, median/p90 over snapshots; R_L on clusters only (for two
+  bodies everything is collinear, so R_L is 0/0); R_p split two-body/cluster; truth row from the stored
+  accelerations sets the float32 floor.
+- E4 law recovery: edges with r > 10ε (ε = 0.002); fit log|message| = α log m_j + β log r + γ log m_i + c,
+  equal weight per decade of r; targets 1, −2, 0; bootstrap ranges over files.
+- E5 output: table for all 6 models (final + best-val per design) + truth row, saved as CSV; 2 × 2 figure
+  (two-body/clusters × relative/direction error), final weights only, median with band, p90 dashed.
 
 ### Run plan (keep it small)
 - 1 seed per design. Add seeds only if two designs land within ~2× of each other.
@@ -1070,3 +1088,125 @@ not label correctness. Stage C compares against fresh full-resolution Leapfrog r
 - G5: GNN expected to be slower than direct integration (cheap force law, same step count);
   frame as "when do learned surrogates pay off", not as a speed claim.
 - Stage C: add the time-weighted Design 1 baseline run.
+
+## 2026-10-31 — GNN Stage B: results (`gnn/model.py`, `gnn/train.py`, `gnn/evaluate.py`)
+
+### Setup
+- Designs 1/2/3 trained with the decisions above: kick weights normalised per file, F = 2e-3, Adam
+  1e-3 → 1e-4 (exponential), batch 512, adaptive clipping (10 × median of the last 100 steps), seed 0.
+- **200 epochs, not 100**: the pre-set doubling test (decision 8) found Design 3 at 200 clearly better in
+  6 of 10 decades (> half) → all three rerun at 200. n_epochs, seed and all settings saved in every model.
+- Tables use **final weights** (decision 8). Best-val is evaluated too: identical for Design 3 (best val on
+  its last epoch), slightly better for Design 2 (median 0.0055, R_p 4e-5) — no big gap, so no val-noise steering.
+- Test split (36 files); per-decade numbers are medians with 95% file-bootstrap bands.
+
+### Weight checks (step 1)
+- Un-normalised kick gave two-body only 1.2% of the loss (an accident of units) → per-file normalisation;
+  two-body share then 23% = 48/208 files.
+- Bodies with |a| < F: 7.1% of body-rows, ~1e-7 of the weight → the lowest decades are untrained by design.
+
+### The ladder (200 epochs, seed 0, final weights) — `results/stage_b/summary.csv`, `figures/stage_b_per_decade.png`
+
+| | Design 1 | Design 2 | Design 3 | truth |
+|---|---|---|---|---|
+| median rel. error | 0.997 | 0.0059 | 0.0062 | |
+| worst-decade p90 | 10.7 | 0.26 | 0.11 | |
+| median direction error | 29° | 0.018° | 0.024° | |
+| R_p median | 0.75 | 3.0e-4 | 3.2e-8 | 2.3e-8 |
+| R_L median (clusters) | 0.83 | 9.5e-7 | 4.6e-8 | 3.8e-8 |
+
+- **D1 → D2: the exp(s) output fixes the dynamic-range problem** (median ~1 → 0.6%). Design 1 learned
+  mid-range accelerations to ~5–10% (|a| ~ 1–100, direction 2–5°) but failed at both extremes (→ 1 at large
+  |a|, ≫ 1 at small), as predicted before training: a free vector output cannot represent accelerations
+  spanning ~8 decades. (One round, no decoder, 2 × 128 MLP, standardised inputs, same budget; a larger
+  network or output rescaling might do better.) Its validation loss diverged; not rolled out.
+- **D2 → D3: same accuracy, conservation at the truth floor** (R_p, R_L at float32 round-off), in every seed.
+
+### Seeds (200 epochs, final weights) — `results/stage_b/seeds.csv`
+The 2× rule (D2 vs D3 within ~2×) was triggered → seeds 1, 2 for D2 and D3, run in parallel with the
+law-fit checks; no decision depended on them.
+
+| | median rel. | worst-decade p90 | R_p | α | β |
+|---|---|---|---|---|---|
+| D2 seed 0 / 1 / 2 | 0.0059 / 0.0056 / 0.0056 | 0.26 / 0.18 / 0.11 | 3.0e-4 / 5.3e-5 / 1.6e-5 | 0.93 / 1.04 / 0.91 | −2.10 / −2.01 / −2.31 |
+| D3 seed 0 / 1 / 2 | 0.0062 / 0.0058 / 0.0095 | 0.11 / 0.031 / 0.19 | 3.2e-8 (all) | 1.02 / 1.02 / 1.08 | −1.91 / −1.92 / −1.83 |
+
+- Comparable median accuracy (D2 0.0056–0.0059; D3 0.0058–0.0095, one weaker seed).
+- Tail differences not resolvable with 3 seeds.
+- D3 conserves momentum and angular momentum at the truth floor in every seed; D2's R_p varies 20×
+  between seeds (not structurally controlled).
+- D3's summary β varies less between seeds (spread 0.09 vs 0.30) but is biased shallow (−1.83 to −1.92);
+  D2 scatters both sides of −2.
+
+### Law recovery — `results/stage_b/law_checks.csv`
+Three checks (seed 0, final weights), no training.
+1. **Truth control**: same edges, same fit, on the true pair forces G m_j r / (r² + ε²)^1.5 →
+   α = 1.000, β = −2.000, γ = 0.000. The fit is unbiased.
+2. **β per decade of r (main result):**
+
+| r | truth | D2 kick | D3 kick | D3 time |
+|---|---|---|---|---|
+| 0.01–0.1 | −1.994 | −1.996 | −1.997 | −2.00 |
+| 0.1–1 | −2.000 | −2.006 | −1.997 | −2.00 |
+| 1–10 | −2.000 | −1.86 | −1.93 | −2.00 |
+| 10–100 | −2.000 | −3.13 | −1.40 | −1.98 [−1.99, −1.94] |
+
+3. **Refits of the whole range** (β): per-decade weighting (summary) D2 −2.10, D3 −1.91; density
+   (every edge once) D2 −2.15, D3 −1.86; kick-weighted D2 −2.02 [−2.05, −1.98], D3 −1.96 [−1.99, −1.93].
+   Kick weighting moves both toward −2; density weighting moves away (it weights the distant region).
+- Interpretation: both designs recover the inverse-square exponent to within 0.006 for r < 1. At larger
+  separations, pair forces are weakly constrained: training sees only each body's total acceleration, and
+  kick weighting gives little weight to the weak-force moments where distant pairs matter. The time-weighted
+  model recovers β = −2.00 in every decade, confirming the large-r deviation comes from the training
+  weighting, not the architecture.
+- The summary β depends on the fit weighting, so it is a footnote; the per-decade table is the result.
+
+### Weighting trade-off (time- vs kick-weighted Design 3) — `results/stage_b/weighting_compare.csv`
+Time-weighted D3: 200 epochs, seed 0, per-file normalised over body-rows (the Stage C baseline, trained now).
+
+| \|a\| (clusters) | kick, seeds 0–2 | time |
+|---|---|---|
+| 0.01–0.1 | 0.014–0.065 | 0.00095 |
+| 0.1–1 | 0.011–0.015 | 0.0026 |
+| 1–10 | 0.0032–0.0048 | 0.00081 |
+| 10–100 | 0.0017–0.0028 | 0.00096 |
+| 100–1000 | 0.0011–0.0020 | 0.0047 |
+| 1e3–1e4 | 0.0019–0.012 | 0.060 |
+| 1e4–1e5 | 0.0044–0.0070 | 0.061 |
+
+Two-body: kick slightly better at |a| 1–10 (0.0008–0.0014 vs 0.0032, bands nearly touch); overlap elsewhere.
+
+- On one-step accuracy, the two weightings trade off. Time weighting is 2–70× more accurate for |a| below
+  ~100 and recovers the inverse-square law at all separations. Kick weighting is 2–30× more accurate at close
+  encounters (|a| above ~100), where time weighting's error rises to ~6%. Each weighting is most accurate
+  where it concentrates training effort. The overall median (0.0023 vs 0.0058–0.0095) favours time weighting
+  only because most snapshots are quiet. Stage C rollouts decide between them.
+- **A single summary number misled; the per-decade breakdown revealed the trade-off.**
+
+### G1 answered
+Yes. Median relative error 0.6% (kick D2/D3) and 0.23% (time D3) against the zero baseline of 1 —
+~170× and ~430× better. Every decade above F is well below 1 for Designs 2 and 3.
+
+### Limitations
+- One time-weighted seed (but every cluster decade lies outside the range of all three kick seeds).
+- Design 3's best validation was on its last epoch: it may still be improving at 200 (favours D3; not rerun).
+- Lowest |a| decades are untrained by design (|a| < F: 7.1% of body-rows, ~1e-7 of the weight).
+- D2's R_p varies a lot between seeds and checkpoints: not structurally controlled.
+
+### Broke / gotchas
+- OneDrive sync locked a checkpoint mid-save (error 1224) → models now saved in C:/nbody_results/stage_b.
+- Background jobs stop after 2 h, and a laptop restart killed one run → long runs launched as detached
+  processes. Overnight sleep paused runs (epoch times of ~51,000 s in the logs); no effect on results,
+  and training time is not a measured quantity.
+- Design 3 collapsed without clipping → adaptive clipping (decision 10).
+
+### Stage C plan
+- Roll out **kick-D3 and time-D3 as equals**; rollouts choose the weighting (G1 can't, decision 3).
+- **D2** as the third-law comparison (equal one-step accuracy, so D2 vs D3 isolates the third law);
+  first cut if time is short. D1 not rolled out.
+- **Prediction (recorded before any rollout; not a result):** kick likely wins cluster rollouts
+  (encounters drive trajectory error, and time weighting has ~6% error there); time likely wins or ties
+  two-body and long quiet orbits (distant pairs correct).
+
+### State
+**Stage B complete.**

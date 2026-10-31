@@ -14,7 +14,7 @@ from gnn.split import DATA_DIR, load_split
 F = 2e-3  # loss floor on |a| (labbook 2026-10-25)
 CLIP_K = 10  # clip a step whose gradient is more that CLIP_k x the recent median gradient size
 CLIP_WINDOW = 100  # how many recent training steps that median is taken over
-OUT_DIR = os.path.join("results", "stage_b")  # where trained models are saved (relative to the project folder)
+OUT_DIR = "C:/nbody_results/stage_b"  # trained models, kept outside OneDrive: its sync locked the file mid-save (error 1224)
 
 
 def relative_error(pred: torch.Tensor, y: torch.Tensor, floor: float = F) -> torch.Tensor:
@@ -91,7 +91,8 @@ def train(design: int, scheme: str = "kick", n_epochs: int = 100, batch_size: in
 
     # where to save
     os.makedirs(out_dir, exist_ok=True) # create the folder if it doesn't exist yet
-    path = os.path.join(out_dir, f"design{design}_{scheme}_{n_epochs}ep.pt") # e.g. results/stage_b/design2_kick_100ep.pt
+    tag = f"_seed{seed}" if seed != 0 else ""  # seed 0 keeps the original file names
+    path = os.path.join(out_dir, f"design{design}_{scheme}_{n_epochs}ep{tag}.pt")  # e.g. design2_kick_200ep_seed1.pt
 
     for epoch in range(n_epochs):
         start = time.time()  # to time the epoch
@@ -131,7 +132,8 @@ if __name__ == "__main__":
     design = int(sys.argv[1])  # e.g. python -m gnn.train 2
     n_epochs = int(sys.argv[2]) if len(sys.argv) > 2 else 100  # optional: python -m gnn.train 2 3 runs 3 epochs
     scheme = sys.argv[3] if len(sys.argv) > 3 else "kick"  # optional: "time" for the Stage C baseline
+    seed = int(sys.argv[4]) if len(sys.argv) > 4 else 0  # optional: python -m gnn.train 2 200 kick 1 runs seed 1
 
-    print(train(design, scheme, n_epochs))
+    print(train(design, scheme, n_epochs, seed=seed))
 
 

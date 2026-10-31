@@ -1,0 +1,8 @@
+﻿design 2 kick seed 0  median rel 0.00594  p90 worst 0.263  R_p 0.0003  alpha 0.931  beta -2.102
+design 2 kick seed 1  median rel 0.00558  p90 worst 0.176  R_p 5.3e-05  alpha 1.035  beta -2.007
+design 2 kick seed 2  median rel 0.00559  p90 worst 0.107  R_p 1.6e-05  alpha 0.912  beta -2.308
+design 3 kick seed 0  median rel 0.0062  p90 worst 0.113  R_p 3.2e-08  alpha 1.022  beta -1.905
+design 3 kick seed 1  median rel 0.00576  p90 worst 0.0307  R_p 3.2e-08  alpha 1.023  beta -1.916
+design 3 kick seed 2  median rel 0.00949  p90 worst 0.186  R_p 3.2e-08  alpha 1.078  beta -1.827
+design 3 time seed 0  median rel 0.00234  p90 worst 0.121  R_p 3.2e-08  alpha 0.998  beta -1.998
+saved results\stage_b\seeds.csv
