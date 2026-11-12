@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+  :root { --ink: #e8e6e0; --muted: #9a988f; --panel: rgba(12, 14, 20, 0.72); --line: rgba(255, 255, 255, 0.14); }
+  html, body { margin: 0; height: 100%; background: #000; color: var(--ink); font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+  canvas#scene { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  .panel { position: fixed; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; backdrop-filter: blur(4px); }
+  #info { top: 14px; left: 14px; padding: 10px 14px; max-width: 340px; }
+  #info h1 { font-size: 15px; margin: 0 0 4px; font-weight: 600; }
+  #info .clock { font-size: 20px; font-variant-numeric: tabular-nums; margin: 2px 0 8px; }
+  #info .key { display: grid; grid-template-columns: 18px 1fr; gap: 3px 8px; align-items: center; color: var(--muted); }
+  .dot { width: 11px; height: 11px; border-radius: 50%; justify-self: center; }
+  .ghost { width: 11px; height: 11px; border-radius: 50%; border: 1.5px solid #ccc; opacity: 0.6; justify-self: center; }
+  .bar { width: 14px; height: 2px; background: #9a9a9a; justify-self: center; }
+  #graphbox { right: 14px; bottom: 66px; padding: 6px; }
+  #graph { display: block; width: 400px; height: 240px; }
+  #controls { left: 50%; transform: translateX(-50%); bottom: 14px; padding: 8px 12px; display: flex; gap: 12px; align-items: center; width: min(880px, calc(100vw - 60px)); box-sizing: border-box; }
+  button, select { background: #1d2230; color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; font: inherit; cursor: pointer; }
+  button:hover, select:hover { background: #283043; }
+  input[type=range] { flex: 1; accent-color: #3987e5; }
+  label { color: var(--muted); display: flex; gap: 6px; align-items: center; white-space: nowrap; }
+  #error { position: fixed; inset: 0; display: none; place-items: center; padding: 40px; text-align: center; color: #f0a0a0; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+
+<div id="info" class="panel">
+  <h1 id="title"></h1>
+  <div class="clock" id="clock">t = 0.00</div>
+  <div class="key" id="key"></div>
+</div>
+
+<div id="graphbox" class="panel"><canvas id="graph"></canvas></div>
+
+<div id="controls" class="panel">
+  <button id="play">▶ Play</button>
+  <input id="slider" type="range" min="0" max="1000" value="0" step="1" aria-label="time">
+  <label>speed <select id="speed">
+    <option value="0.25">×0.25</option><option value="0.5">×0.5</option><option value="1" selected>×1</option>
+    <option value="2">×2</option><option value="4">×4</option>
+  </select></label>
+  <label><input type="checkbox" id="spin" checked> drift</label>
+</div>
+
+<div id="error"></div>
+
+<script type="application/json" id="data">__DATA__</script>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+const D = JSON.parse(document.getElementById("data").textContent);
+const T = D.times.length, N = D.masses.length;
+const t0 = D.times[0], t1 = D.times[T - 1];
+const unit = D.period || 1;                       // two-body: time shown in orbits
+const unitName = D.period ? "orbits" : "time";
+const TRAIL = 160;                                 // points per trail
+
+// ---------- interpolated positions ----------
+function at(run, body, t) {                        // run = D.ref or D.gnn; linear between checkpoints
+  const f = Math.min(Math.max((t - t0) / (t1 - t0) * (T - 1), 0), T - 1);
+  const i = Math.min(Math.floor(f), T - 2), w = f - i;
+  const a = run[i][body], b = run[i + 1][body];
+  return [a[0] + (b[0] - a[0]) * w, a[1] + (b[1] - a[1]) * w, a[2] + (b[2] - a[2]) * w];
+}
+function divAt(t) {
+  const f = Math.min(Math.max((t - t0) / (t1 - t0) * (T - 1), 0), T - 1);
+  const i = Math.min(Math.floor(f), T - 2), w = f - i;
+  return D.div[i] + (D.div[i + 1] - D.div[i]) * w;
+}
+
+// ---------- scene ----------
+const canvas = document.getElementById("scene");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 2000);
+{
+  const n = new THREE.Vector3(...D.spin);          // orbital axis: look down it, tilted, so orbits are seen nearly face-on
+  const side = new THREE.Vector3().crossVectors(n, Math.abs(n.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0)).normalize();
+  const dist = D.viewRadius / Math.tan(THREE.MathUtils.degToRad(22.5)) * 1.25;
+  camera.up.copy(n);                               // drift then turns the view about the orbital axis
+  camera.position.copy(n.clone().multiplyScalar(Math.cos(0.61)).addScaledVector(side, Math.sin(0.61)).multiplyScalar(dist));
+}
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.35;
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+scene.add(sun);
+
+// starfield: random points on a large shell
+{
+  const n = 3000, pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+  for (let k = 0; k < n; k++) {
+    const u = Math.random() * 2 - 1, phi = Math.random() * Math.PI * 2, r = 400 + Math.random() * 400;
+    const s = Math.sqrt(1 - u * u);
+    pos.set([r * s * Math.cos(phi), r * s * Math.sin(phi), r * u], k * 3);
+    const b = 0.35 + Math.random() * 0.65;
+    col.set([b, b, b * (0.9 + Math.random() * 0.1)], k * 3);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  g.setAttribute("color", new THREE.BufferAttribute(col, 3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({ size: 1.6, vertexColors: true, sizeAttenuation: false })));
+}
+
+// soft glow texture for the sprites
+function glowTexture() {
+  const c = document.createElement("canvas"); c.width = c.height = 128;
+  const g = c.getContext("2d"), grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grad.addColorStop(0, "rgba(255,255,255,1)"); grad.addColorStop(0.25, "rgba(255,255,255,0.45)");
+  grad.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = grad; g.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(c);
+}
+const glow = glowTexture();
+
+const mMax = Math.max(...D.masses);
+const bodies = [];
+for (let i = 0; i < N; i++) {
+  const colour = new THREE.Color(D.colours[i]);
+  const radius = Math.max(0.16, 0.42 * Math.cbrt(D.masses[i] / mMax)) * D.sceneRadius / 10;
+
+  const refMesh = new THREE.Mesh(new THREE.SphereGeometry(radius, 32, 16),
+    new THREE.MeshStandardMaterial({ color: colour, emissive: colour, emissiveIntensity: 0.55, roughness: 0.5 }));
+  const refGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, color: colour, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.9 }));
+  refGlow.scale.setScalar(radius * 7);
+  refMesh.add(refGlow);
+
+  const gnnMesh = new THREE.Mesh(new THREE.SphereGeometry(radius * 1.05, 24, 12),
+    new THREE.MeshBasicMaterial({ color: colour, wireframe: true, transparent: true, opacity: 0.55 }));
+  const gnnGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, color: colour, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.3 }));
+  gnnGlow.scale.setScalar(radius * 5);
+  gnnMesh.add(gnnGlow);
+
+  const trail = (dashed) => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(TRAIL * 3), 3));
+    g.setAttribute("color", new THREE.BufferAttribute(new Float32Array(TRAIL * 3), 3));
+    const m = dashed
+      ? new THREE.LineDashedMaterial({ vertexColors: true, dashSize: 0.25, gapSize: 0.18, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })
+      : new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+    const line = new THREE.Line(g, m);
+    line.frustumCulled = false;
+    return line;
+  };
+  const refTrail = trail(false), gnnTrail = trail(true);
+
+  const linkGeom = new THREE.BufferGeometry();
+  linkGeom.setAttribute("position", new THREE.BufferAttribute(new Float32Array(6), 3));
+  const link = new THREE.Line(linkGeom, new THREE.LineBasicMaterial({ color: 0xb0b0b0, transparent: true, opacity: 0.75 }));
+  link.frustumCulled = false;
+
+  scene.add(refMesh, gnnMesh, refTrail, gnnTrail, link);
+  bodies.push({ colour, refMesh, gnnMesh, refTrail, gnnTrail, link });
+}
+
+function fillTrail(line, run, body, t, colour, strength) {
+  const p = line.geometry.attributes.position.array, c = line.geometry.attributes.color.array;
+  const start = Math.max(t0, t - D.trailTime);
+  for (let j = 0; j < TRAIL; j++) {
+    const s = j / (TRAIL - 1);                     // 0 = oldest, 1 = now
+    const q = at(run, body, start + (t - start) * s);
+    p.set(q, j * 3);
+    const fade = strength * Math.pow(s, 1.6);      // fades to black, which is invisible with additive blending
+    c.set([colour.r * fade, colour.g * fade, colour.b * fade], j * 3);
+  }
+  line.geometry.attributes.position.needsUpdate = true;
+  line.geometry.attributes.color.needsUpdate = true;
+  if (line.material.isLineDashedMaterial) line.computeLineDistances();
+}
+
+// ---------- corner graph ----------
+const gc = document.getElementById("graph"), gx = gc.getContext("2d");
+const positive = D.div.filter(v => v > 0);
+const yLo = Math.pow(10, Math.floor(Math.log10(Math.max(Math.min(...positive), 1e-12))));
+const yHi = Math.pow(10, Math.ceil(Math.log10(Math.max(...positive) * 1.2)));
+function sizeGraph() {
+  const r = window.devicePixelRatio || 1;
+  gc.width = 400 * r; gc.height = 240 * r; gx.setTransform(r, 0, 0, r, 0, 0);
+}
+function drawGraph(t) {
+  const W = 400, H = 240, L = 52, R = 10, Tp = 24, B = 30;
+  const X = v => L + (v - t0 / unit) / ((t1 - t0) / unit) * (W - L - R);
+  const Y = v => Tp + (Math.log10(yHi) - Math.log10(Math.max(v, yLo))) / (Math.log10(yHi) - Math.log10(yLo)) * (H - Tp - B);
+  gx.clearRect(0, 0, W, H);
+  gx.font = "11px system-ui, sans-serif";
+  gx.fillStyle = "#cfcdc6"; gx.textAlign = "left";
+  gx.fillText(`divergence of ${D.model} from the reference`, L, 14);
+  gx.strokeStyle = "rgba(255,255,255,0.10)"; gx.fillStyle = "#9a988f"; gx.textAlign = "right"; gx.lineWidth = 1;
+  for (let e = Math.log10(yLo); e <= Math.log10(yHi); e++) {
+    const y = Y(Math.pow(10, e));
+    gx.beginPath(); gx.moveTo(L, y); gx.lineTo(W - R, y); gx.stroke();
+    if ((Math.log10(yHi) - e) % 2 === 0) gx.fillText(`1e${e}`, L - 6, y + 4);
+  }
+  gx.textAlign = "center";
+  const span = (t1 - t0) / unit, tick = span > 12 ? 5 : span > 5 ? 1 : 0.5;
+  for (let v = Math.ceil(t0 / unit / tick) * tick; v <= t1 / unit + 1e-9; v += tick) gx.fillText(`${+v.toFixed(2)}`, X(v), H - B + 14);
+  gx.fillText(unitName, (L + W - R) / 2, H - 3);
+  gx.save(); gx.translate(11, (Tp + H - B) / 2); gx.rotate(-Math.PI / 2); gx.fillText(D.divLabel, 0, 0); gx.restore();
+
+  gx.strokeStyle = "rgba(255,255,255,0.55)"; gx.beginPath(); gx.moveTo(L, Y(0.1)); gx.lineTo(W - R, Y(0.1)); gx.stroke();
+  if (D.horizon !== null) {
+    gx.setLineDash([3, 3]); gx.beginPath(); gx.moveTo(X(D.horizon / unit), Tp); gx.lineTo(X(D.horizon / unit), H - B); gx.stroke(); gx.setLineDash([]);
+    gx.fillStyle = "#cfcdc6"; gx.textAlign = "left"; gx.fillText(`horizon t = ${D.horizon.toFixed(2)}`, X(D.horizon / unit) + 4, H - B - 6);
+  }
+  const draw = (upto, style, width) => {
+    gx.strokeStyle = style; gx.lineWidth = width; gx.beginPath();
+    let started = false;
+    for (let k = 1; k < T && D.times[k] <= upto; k++) {
+      const x = X(D.times[k] / unit), y = Y(D.div[k]);
+      if (!started) { gx.moveTo(x, y); started = true; } else gx.lineTo(x, y);
+    }
+    gx.stroke(); gx.lineWidth = 1;
+  };
+  draw(t1, "rgba(255,255,255,0.18)", 1);
+  draw(t, "#3987e5", 2);
+  gx.fillStyle = "#3987e5"; gx.beginPath(); gx.arc(X(t / unit), Y(divAt(t)), 4, 0, Math.PI * 2); gx.fill();
+}
+
+// ---------- labels ----------
+document.getElementById("title").textContent = `${D.title}: ${D.model} vs true force`;
+const key = document.getElementById("key");
+key.innerHTML = `<span class="dot" style="background:#ddd"></span><span>true force (reference): solid</span>` +
+  `<span class="ghost"></span><span>${D.model}: wireframe ghost, dashed trail</span>` +
+  `<span class="bar"></span><span>grey line: that body's error</span>` +
+  D.masses.map((m, i) => `<span class="dot" style="background:${D.colours[i]}"></span><span>m = ${+m.toPrecision(3)}</span>`).join("");
+
+// ---------- playback ----------
+let t = t0, playing = false, last = null, rate = D.defaultRate;
+const fromUrl = parseFloat((location.hash.match(/t=([\d.]+)/) || [])[1]);  // e.g. page.html#t=2 opens at t = 2
+if (Number.isFinite(fromUrl)) t = Math.min(Math.max(fromUrl, t0), t1);
+const playBtn = document.getElementById("play"), slider = document.getElementById("slider");
+const clock = document.getElementById("clock");
+function setPlaying(p) { playing = p; playBtn.textContent = p ? "❚❚ Pause" : "▶ Play"; last = null; }
+playBtn.onclick = () => { if (t >= t1) t = t0; setPlaying(!playing); };
+slider.oninput = () => { t = t0 + (t1 - t0) * slider.value / 1000; };
+document.getElementById("speed").onchange = e => { rate = D.defaultRate * parseFloat(e.target.value); };
+document.getElementById("spin").onchange = e => { controls.autoRotate = e.target.checked; };
+window.addEventListener("keydown", e => { if (e.code === "Space") { e.preventDefault(); playBtn.click(); } });
+
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); sizeGraph();
+}
+window.addEventListener("resize", resize);
+resize();
+
+function update() {
+  for (let i = 0; i < N; i++) {
+    const b = bodies[i], pr = at(D.ref, i, t), pg = at(D.gnn, i, t);
+    b.refMesh.position.set(...pr);
+    b.gnnMesh.position.set(...pg);
+    fillTrail(b.refTrail, D.ref, i, t, b.colour, 1.0);
+    fillTrail(b.gnnTrail, D.gnn, i, t, b.colour, 0.7);
+    const lp = b.link.geometry.attributes.position.array;
+    lp.set(pg, 0); lp.set(pr, 3); b.link.geometry.attributes.position.needsUpdate = true;
+  }
+  clock.textContent = D.period ? `t = ${t.toFixed(2)}  ·  ${(t / D.period).toFixed(1)} orbits` : `t = ${t.toFixed(2)}`;
+  if (!slider.matches(":active")) slider.value = Math.round((t - t0) / (t1 - t0) * 1000);
+  drawGraph(t);
+}
+
+function frame(now) {
+  if (playing) {
+    if (last !== null) t = Math.min(t + (now - last) / 1000 * rate, t1);
+    last = now;
+    if (t >= t1) setPlaying(false);
+  }
+  sun.position.copy(camera.position);              // light from the viewer, so the lit side faces you
+  controls.update();
+  update();
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+window.__started = true;
+</script>
+<script>
+  // shown only if the module above never starts (no internet, or a blocked script)
+  setTimeout(() => {
+    if (!window.__started) {
+      const e = document.getElementById("error");
+      e.style.display = "grid";
+      e.textContent = "The 3D view didn't start. It loads three.js from cdn.jsdelivr.net, so it needs an internet connection. Press F12 → Console to see the error.";
+    }
+  }, 6000);
+</script>
+</body>
+</html>

@@ -120,9 +120,12 @@ still before any model slope)
   the system's own size).
 
 **Interpretation notes**
-- Closest approach (reference runs): test clusters ~0.18ε, holdout ~0.05ε. Training coverage is thin below 0.2ε
-  (09-25). Test encounters sit at the edge of the covered region (mostly interpolation); holdout encounters go
-  well below it (genuine extrapolation). See G4.
+- Closest approach (reference runs, min_sep_run / ε): test median 0.68ε, deepest 0.18ε (1/20 below 0.2ε);
+  holdout median 0.60ε, deepest 0.054ε (9/59 below 0.2ε). Training coverage is thin below 0.2ε (09-25).
+  Typical encounters in both splits sit inside the covered region; only the 9 deepest holdout clusters go well
+  below it. See G4.
+  - Corrected 2026-11-12 (factual error, not a rule change): the earlier "test ~0.18ε, holdout ~0.05ε" quoted the
+    deepest encounter in each split as if typical.
 
 ### G3 — conservation
 - Energy: **ΔE/|U₀|** (the 09-25 dataset metric), so GNN, reference and dataset tolerance share one footing.

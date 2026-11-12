@@ -1210,3 +1210,407 @@ Yes. Median relative error 0.6% (kick D2/D3) and 0.23% (time D3) against the zer
 
 ### State
 **Stage B complete.**
+
+## 2026-11-12 — GNN Stage C session 1: G2 vote and G3 on test (`gnn/g2_slopes.py`, `gnn/g3_conservation.py`)
+
+Finish-fast mode from today (CLAUDE.md decision policy; rules frozen in `stage-c-decisions.md`).
+Code written and run by Claude Code under that mandate. Outputs in `results/stage_c/` (`g2_*_test.*`, `g3_test.*`).
+
+### Decisions taken
+- **Noise gate replaced before any model slope (Project, 2026-11-12).** The original max ÷ min gate failed
+  (mean 1.62 ≥ 1.5, max 5.64 at cluster_01062, median 1.33). It was replaced by the false-vote test: each
+  true-force seed is treated as a pretend model against the mean of the other two seeds. Official run: 2, 1, 1 false
+  votes of 18 at 1.5× (main window) and 2, 1, 3 on the 1e-3 window, so the gate **passes**: at most 4 of 18 are allowed.
+  False-vote share at 1.25/1.5/2/2.5×: 18.5/7.4/1.9/0% (main), 20.4/11.1/3.7/1.9% (1e-3). These come from three
+  seeds that share data, so they are an indication only.
+- **Fit start:** the first row ≥ 1e-4 after the last row below it. This avoids log(0) at t = 0 (mean noise 1.62 vs 1.61).
+- **A GNN fit that never reaches 0.1 counts as "no".** This never happened: every model reaches 0.1 on all 18 voting clusters.
+- **Pandas was not installed**, so the scripts write their CSVs with the `csv` module, as Stage B did. No new dependency.
+- **Holdout run in parallel.** `run_rollouts.py` takes an optional `reverse` argument, so a second process can work
+  from the other end of the file list. Each process now writes its temporary file under its own name, so two
+  processes never write the same file. Results are unchanged: same files, same settings.
+- **Extra control, outside the rules:** RK4 run through the same vote against the baselines. It is reported
+  beside the vote and changes nothing.
+
+### G2 — vote (18 voting clusters; non-voting cluster_01043 and cluster_01099)
+| model | yes (main) | yes (1e-3) | median ratio (main / 1e-3) | reading |
+|---|---|---|---|---|
+| kick-D3 | 7/18 | 4/18 | 1.33 / 1.23 | model error in some clusters |
+| time-D3 | 7/18 | 6/18 | 1.27 / 1.08 | model error in some clusters |
+| D2 | 3/18 | 3/18 | 1.14 / 0.96 | model error in some clusters (lower edge) |
+| RK4 (control) | 0/18 | 1/18 | 1.02 / 1.03 | within noise |
+
+- **No model reaches a majority.** For every model the divergence grows mostly at the chaotic rate, with a model
+  contribution visible in a minority of clusters. The RK4 control (0/18) shows that 7/18 is more than noise alone gives.
+- **Ratios move together across models within a cluster** (e.g. cluster_01023 ≈ 0.25–0.30 for all three, and
+  cluster_01055 ≈ 1.7–2.1). So a ratio depends largely on the cluster, not the model. Outlier: time-D3 on
+  cluster_01089 has ratio 12.3.
+- **The GNN error jumps early.** Each GNN curve passes 1e-4 by t ≈ 0.1 and 1e-3 by t ≈ 0.3 (medians). The baselines
+  only pass 1e-4 at t ≈ 1.7, after their 1e-6 nudge. So the GNN window covers t ≈ 0.1–1.6 and the baseline window
+  t ≈ 1.7–4.0: the same δ range, at different times in the run. The rules allow for this (compare slopes, same δ range).
+- **Horizons** (median over clusters that reach 0.1): baselines 3.4–4.0 (18/20), RK4 4.4, kick-D3 1.64,
+  time-D3 1.66 and D2 2.15 (20/20 each). Models also reach 0.1 on both non-voting clusters, where chaos alone never
+  does (cluster_01043: 4.5 / 2.9 / 3.0; cluster_01099: 11.1 / 9.4 / 3.8 for kick / time / D2).
+- **Two-body horizons** (|Δr_rel|/a ≥ 0.1, median): kick-D3 0.91 (16/16), time-D3 1.43 (15/16), D2 1.50 (14/16).
+  RK4 never reaches 0.1.
+- **R² < 0.9:** many fits on the 1e-3 window, where the baselines' windows are short and step-like. On the main
+  window: 3 baseline fits, 3 RK4, 4 kick-D3, 4 time-D3 and 7 D2. The full list is in `g2_fits_test.csv`.
+
+### G3 — conservation (medians over files)
+| run | cluster max \|ΔE\|/\|U₀\| | over 1e-2 tol | q (below 1%) | cluster max ΔL | two-body max \|ΔE\|/\|U₀\| | two-body q |
+|---|---|---|---|---|---|---|
+| reference (Leapfrog) | 1.0e-4 | 0/20 | 0.62 | 2.6e-13 | 2.5e-7 | 0.05 |
+| RK4 | 3.0e-9 | 0/20 | 1.15 | 1.6e-12 | 7.4e-14 | 0.13 |
+| kick-D3 | 4.9e-3 | 6/20 | 0.33 | 1.1e-6 | 3.8e-4 | 0.08 |
+| time-D3 | 8.4e-2 | 19/20 | 1.01 | 5.5e-6 | 4.5e-4 | 0.06 |
+| D2 | 1.0e-2 | 10/20 | 0.47 | 1.2e-1 | 2.9e-4 | 0.11 |
+
+- Two-body: every GNN jumps to a plateau of ~3–5e-4 in the first ~0.3 time units and stays flat (late/early 1.00).
+  The error is bounded at the size of the mismatch between learned and true energy, as predicted for D3. All
+  three models sit above the 1e-4 two-body dataset tolerance.
+- Clusters: the energy error rises in steps at encounters. Kick-D3 mostly stays bounded below the tolerance
+  (q 0.33). **Time-D3 grows roughly linearly (q ≈ 1.0) and passes the 1e-2 tolerance on 19/20 clusters**, which
+  goes against the "D3 energy bounded" prediction.
+- **L:** D2 has no third law and loses angular momentum (median 12%), as predicted. D3 stays at 1e-6, i.e. float32
+  round-off wandering slowly, as predicted.
+
+### Against the predictions
+- **Kick vs time:** the prediction partly holds. On cluster conservation kick wins by about 17× in energy. On cluster
+  divergence it is a tie (7/18 each; horizons 1.64 vs 1.66). Time wins two-body divergence (horizon 1.43 vs 0.91),
+  as predicted.
+- **Time-D3 cluster energy drifts** instead of staying bounded. This fits Stage B's ~6% time-weighted error in close
+  encounters: each encounter adds an energy error.
+- **D2 does not do worse than D3 on G2** (3/18, longest horizon) even though it loses L. The third law matters for
+  conservation but not, on this evidence, for how fast the error grows.
+
+### State
+Test G2 and G3 done. Holdout rollouts (reference + 2 extra baseline seeds, RK4, kick-D3 and time-D3; each GNN
+split over two processes) launched 2026-11-12 as detached jobs.
+
+### Session 2 prep (same day, while holdout runs)
+- **Animations** (`gnn/animate_rollouts.py`, `results/stage_c/animation_*.mp4`; kick-D3 vs the true-force reference, 3D):
+  - **Two-body:** `two_body_00062` (equal mass, eccentric, horizon 0.73). GNN overlaid on the reference, with the clock
+    in orbits. It shows a phase lag on an almost unchanged ellipse.
+  - **Cluster:** `cluster_01073` (N 4). Closest approach is at t 0.36, just before the horizon at 0.89.
+    - Only t 0–4 is shown. Over 0–20 the encounter and horizon pass in under 2 s of video, and a later escaper
+      forced a ±10 box.
+    - Reference and GNN are in separate 3D panels with one camera. The GNN panel also shows grey ghosts of the
+      reference bodies, joined by error lines. In the overlay the divergence was hard to see.
+  - Both videos have a live divergence panel with the horizon marked.
+- **G4 script** (`gnn/g4_generalisation.py`): holdout clusters are grouped by the reference's closest approach,
+  taken from `min_sep_run` in the dataset files (the replay check shows the reference reproduces them exactly).
+  - Only 9 of 59 holdout clusters are below 0.2ε. The "~0.05ε" in the decisions doc looks like a figure for the
+    deepest runs, not a typical one.
+  - Also grouped by holdout category (N, Q and mass ratio, interpolation or extrapolation) to separate new settings
+    from deeper encounters.
+- **G5 script** (`gnn/g5_timing.py`): random positions, equal masses, single thread. 50 warm-up calls, then the
+  median of 15 blocks of 200 calls. To be run on an idle machine.
+- **Holdout:** RK4 and the reference got second processes running the file list in reverse, to finish sooner.
+- **Orbit explorer** (`gnn/orbit_explorer.py` + `gnn/explorer_template.html` → `results/stage_c/orbit_explorer.html`):
+  one full-screen three.js page.
+  - Pick the orbit (two-body / figure-eight / cluster), the mass ratio, the eccentricity or N, and the GNN.
+    It covers every test run plus the figure-eight.
+  - Playback runs on the clock. Between saved checkpoints the page draws cubic curves using the saved velocities.
+  - Also `space_*.html`: single-run versions of the two animation runs.
+- **Figure-eight demo** (`gnn/figure8_rollouts.py`). This is outside the frozen G2–G4 rules and is not a result.
+  - Setup: Moore's initial conditions, put in dataset units (total mass 1, virial radius 1, period 1.676), run for
+    t = 0–20 (about 12 periods) with the same adaptive integrator.
+  - Final δ: time-D3 8e-4, D2 6e-3, kick-D3 5.4e-2. None reaches 0.1. The error grows steadily on this stable orbit
+    rather than exponentially.
+  - Ranking time > D2 > kick on a quiet orbit, as the 10-31 prediction expects.
+  - Kick-D3 energy error 1.2e-4.
+
+## 2026-11-12 — GNN Stage C session 2: holdout G2/G3, G4 gap, G5 timing (`gnn/g4_generalisation.py`, `gnn/g5_timing.py`)
+
+Finish-fast mode. Holdout rollouts for kick-D3 and time-D3 finished at 79/79 files each (59 clusters without
+cluster_01216, plus 20 two-body), with no errors. G5 ran first, while the machine was idle. Outputs in `results/stage_c/`
+(`g2_*_holdout.*`, `g3_holdout.*`, `g4_holdout.csv`, `g5_timing.*`).
+
+### Decisions taken
+- **Vote bands with 58 voters.** The reporting bands in `stage-c-decisions.md` (0–2 / 3–9 / 10+) are written for
+  18 voters. Options: (a) the script's reading: majority = more than half (30+ of 58), noise = 0–2 absolute;
+  (b) scale the noise band by share (2/18 = 11% → 0–6 of 58); (c) use the measured holdout noise (false votes
+  ≤ 5/58, RK4 control 5–6/58). **All three give the same reading for both models**: "model error in some
+  clusters" (12–17 yes, above every noise band, well below 30). Headline (a), the script as written before the
+  data. No rule was changed.
+- **Gate on holdout:** same false-vote test, same 25% limit (the "4 of 18" written as a share in the script before any
+  model data). Passes: 3, 4, 1 of 58 (main) and 5, 5, 1 (1e-3).
+- **Horizon ratio beside slope ratio** (open question from session 1). Computed cheaply from the saved horizons:
+  per cluster, GNN horizon ÷ mean baseline horizon. Reported as a supplement only; the vote is unchanged.
+- **RK4 control on holdout** is computed from the saved fits (`g2_fits_holdout.csv`), the same way as on test;
+  rerunning it on the test fits reproduces 0/18 and 1/18. Outside the rules.
+- **Orbit explorer**: holdout runs added to the same page (116 runs, 33.7 MB) rather than a second page. New
+  menus: data set (test / holdout) and run (every run that matches, labelled by Q, closest approach and holdout
+  category). Before this, only the first run per mass ratio and N was reachable. The GNN menu lists only the
+  models that exist for that run (holdout: kick-D3 and time-D3).
+
+### G2 — holdout vote (58 voting clusters; non-voting cluster_01223)
+| model | yes (main) | yes (1e-3) | median ratio (main / 1e-3) | reading |
+|---|---|---|---|---|
+| kick-D3 | 12/58 (21%) | 12/58 | 1.03 / 0.86 | model error in some clusters |
+| time-D3 | 17/58 (29%) | 14/58 | 1.07 / 1.01 | model error in some clusters |
+| RK4 (control) | 5/58 | 6/58 | 1.03 / 1.06 | within noise |
+
+- False-vote share at 1.25/1.5/2/2.5×: 17.2/4.6/1.1/0% (main), 23.0/6.3/3.4/1.1% (1e-3). R² < 0.9 on voting
+  clusters: 10–16 per baseline on the main window, 21 for each GNN; full list in `g2_fits_holdout.csv`.
+
+### G3 — holdout conservation (medians over files)
+| run | cluster max \|ΔE\|/\|U₀\| | over 1e-2 tol | q | cluster max ΔL | two-body max \|ΔE\|/\|U₀\| | over 1e-4 tol |
+|---|---|---|---|---|---|---|
+| reference | 9.1e-5 | 0/59 | 0.97 | 4.2e-13 | 5.9e-7 | 0/20 |
+| RK4 | 7.1e-9 | 0/59 | 1.93 | 6.1e-12 | 3.6e-13 | 0/20 |
+| kick-D3 | 6.7e-3 | 17/59 | 0.41 | 1.7e-5 | 6.3e-4 | 20/20 |
+| time-D3 | 5.2e-2 | 56/59 | 0.68 | 9.1e-6 | 2.0e-3 | 20/20 |
+
+### G4 — gap (holdout minus test)
+| measure | kick-D3 test → holdout | time-D3 test → holdout |
+|---|---|---|
+| yes share (main) | 39% → 21% | 39% → 29% |
+| median slope ratio | 1.33 → 1.03 | 1.27 → 1.07 |
+| median cluster horizon | 1.64 → 1.54 | 1.66 → 1.28 |
+| horizon ÷ baseline horizon (supplement) | 0.41 → 0.54 | 0.41 → 0.48 |
+| cluster max \|ΔE\|/\|U₀\| | 4.9e-3 → 6.7e-3 | 8.4e-2 → 5.2e-2 |
+| two-body horizon | 0.91 → 0.83 | 1.43 → 0.38 |
+| two-body max \|ΔE\|/\|U₀\| | 3.8e-4 → 6.3e-4 | 4.5e-4 → 2.0e-3 |
+
+- **Clusters: no generalisation gap.** Holdout clusters are more chaotic (median baseline horizons 2.8–3.2 vs
+  3.4–4.0 on test, clusters that reach 0.1), so the GNN horizons fall too. Relative to the chaos baseline, though, both models do as well or
+  better on holdout (slope ratio nearer 1, horizon fraction higher). Energy error stays at the test level.
+- **Depth vs new settings:** the 9 clusters below 0.2ε do no worse (1/9 yes for each model; horizon ÷ baseline
+  0.57 / 0.50 vs 0.52 / 0.47 above 0.2ε). So deeper encounters do not explain any gap. By category: Q_interp is
+  the weakest for time-D3 (5/9 yes, ratio 1.53). N_extrap (N = 10) has the highest kick-D3 energy error (1.4e-2, 7/9 over tol).
+- **Two-body: a real gap, mostly time-D3.** Each holdout two-body category is one orbit in 5 orientations; all 5
+  give the same horizon, so the models are rotation-invariant as designed. Horizon (time units) kick / time:
+  e = 0.6 equal mass 1.48 / 0.59; **e = 0.9 equal mass 0.70 / 0.16**; ratio 5:1 0.95 / 1.27; **ratio 15:1 0.54 / 0.09
+  (about 1 orbit)**. Time-D3 is weak exactly where the new two-body settings bring closer, faster approaches
+  (high e, extreme mass ratio). This fits time weighting under-training encounters. Part of the 15:1 error is
+  the softened, precessing orbit (decisions doc note).
+
+### G5 — time per force call (single thread, median of 15 × 200 calls)
+- True force 16–27 µs for N 2–10; kick-D3 193–273 µs, time-D3 200–280 µs, D2 179–255 µs. **The GNN is about 10–13× slower
+  per call** at every N tested, and both costs grow only slowly with N in this range (overhead-dominated).
+  As expected for N ≤ 10, the surrogate does not pay off on speed.
+
+### Against the predictions
+- **Prediction "worse on holdout":** wrong for clusters (relative to chaos, no worse); right for two-body,
+  where the extrapolated orbits hurt time-D3 sharply.
+- **Kick vs time on holdout:** kick wins two-body extrapolation, reversing the test result (time won two-body on test).
+  Time-D3's cluster energy still grows past tolerance (56/59), as on test.
+
+### State
+Stage C G2–G5 complete on test and holdout. Next: session 3 (the Stage C write-up entry). Nothing committed yet.
+
+## 2026-11-12 — GNN Stage C session 3: Stage C answered (G2–G5)
+
+Finish-fast mode. This entry brings together sessions 1–2 and the Project's answers to their open questions
+(2026-11-12). No rule, threshold or window changed. All numbers come from the frozen-rule runs in `results/stage_c/`.
+
+### Decisions taken (Project answers, 2026-11-12, plus checks run this session)
+- **Two-body sample size = orbits, not files.** Two-body files have random 3D orientations (08-09), and the
+  models, integrator and reference are all rotation-equivariant. Checked this session:
+  - The 16 test files are 16 distinct (mass ratio, e) orbits, with no duplicates.
+  - The 20 holdout files are 4 orbits × 5 orientations. All 5 orientations give identical horizons for both models,
+    which is an **equivariance check passed**, not 5 samples. G4 two-body is stated per orbit (n = 4).
+- **Two-body horizons are also given in orbital periods** (a unit conversion, not a rule change), because periods differ
+  by ~9× across mass ratios. This changes the test ranking; see G2.
+- **G3 tolerance:** bounded vs drifting (late/early ratio, q) is the G3 answer, as in Stage 8 Q2. The 1e-4 two-body
+  line is context, not pass/fail. "Over tolerance" counts in the session 1–2 tables are kept as recorded but
+  are not headlined.
+- **Closest-approach note corrected** in `stage-c-decisions.md` (a factual error, stated openly). The "test ~0.18ε,
+  holdout ~0.05ε" figures were each split's deepest encounter, not a typical one. Medians are 0.68ε (test) and 0.60ε
+  (holdout); 1/20 and 9/59 clusters go below 0.2ε.
+- **Wording corrections to session 2:**
+  - "Both models do as well or better on holdout" becomes "no generalisation gap relative to each cluster's own
+    chaos". A ratio nearer 1 can also mean the holdout clusters are more chaotic.
+  - The softening/precession explanation for 15:1 is dropped: the reference uses the same softened force, so
+    precession is in both runs and does not cause GNN-vs-reference error.
+
+### G2 answered — trajectory error growth
+**Clusters.** For every model, the error grows mostly at the system's own chaotic rate. A model contribution shows in a
+minority of clusters, and no model reaches a majority.
+
+| model | yes, test (of 18), main / 1e-3 | yes, holdout (of 58), main / 1e-3 | median slope ratio, test → holdout | median horizon, test → holdout |
+|---|---|---|---|---|
+| kick-D3 | 7 / 4 | 12 / 12 | 1.33 → 1.03 | 1.64 → 1.54 |
+| time-D3 | 7 / 6 | 17 / 14 | 1.27 → 1.07 | 1.66 → 1.28 |
+| D2 | 3 / 3 | — | 1.14 | 2.15 |
+| RK4 (control) | 0 / 1 | 5 / 6 | 1.02 → 1.03 | 4.42 → 3.64 |
+| chaos baselines (Leapfrog, 1e-6 nudge) | — | — | — | 3.4–4.0 → 2.8–3.2 |
+
+- **Reading: "model error in some clusters" for all three models, on both splits.** The false-vote gate passed on
+  both splits (≤ 3/18, ≤ 5/58). The RK4 control sits at the noise level.
+- The GNN's error starts large: it passes 1e-4 by t ≈ 0.1, against t ≈ 1.7 for a 1e-6 nudge. The horizon comes
+  about 2–2.5× earlier than chaos alone gives (GNN ÷ baseline horizon: 0.41 test, 0.48–0.54 holdout), while the
+  growth rate after that is mostly the chaotic one.
+
+**Two-body** (|Δr_rel|/a ≥ 0.1; no chaos, so growth here is pure model error)
+
+| horizon | kick-D3 | time-D3 | D2 |
+|---|---|---|---|
+| test, time units (median of orbits that reach 0.1) | 0.91 (16/16) | 1.43 (15/16) | 1.50 (14/16) |
+| test, orbits (same) | 3.9 | 2.5 | 6.5 |
+| test, orbits won (kick vs time) | 9 | 6 (1 tie) | |
+
+- **Headline: the paired per-orbit comparison, kick vs time on the same orbit, is 9–6–1 on test: level.** It is
+  unit-free. The medians rank the two models the opposite way depending on the unit: in time units time-D3 leads, in
+  orbits (the natural unit, since |Δr_rel|/a is roughly a phase error that builds up per orbit) kick-D3 leads. Time-D3 is better on the high mass-ratio, low-e orbits (7:1 and 10:1, e ≤ 0.4: 6.3 orbits up to never reaching 0.1). Those orbits
+  have short periods, so they inflate a time-unit median. Kick-D3 is better on every equal-mass and 3:1 orbit and at
+  e = 0.8.
+- This matches the Stage B two-body per-decade table: time-D3 is worse at |a| 1–10 (0.0032 vs 0.0008–0.0014), and
+  the equal-mass and 3:1 orbits sit there (median |a| 4–21). The 7:1 and 10:1 light bodies sit at |a| ~30–130,
+  where the two weightings overlap.
+- D2 has the longest two-body horizons (6.5 orbits), consistent with D2 ≥ D3 on cluster G2. The third law does not
+  slow error growth on this evidence.
+
+### G3 answered — conservation
+**Energy error character.** Median max |ΔE|/|U₀|; late/early ratio; q = growth exponent below 1%.
+
+| run | clusters, test / holdout | cluster q, test / holdout | two-body, test / holdout | two-body late/early (holdout) | max \|ΔL\| (clusters) |
+|---|---|---|---|---|---|
+| Leapfrog reference | 1.0e-4 / 9.1e-5 | 0.62 / 0.97 | 2.5e-7 / 5.9e-7 | 0.98 | ~1e-13 |
+| RK4 | 3.0e-9 / 7.1e-9 | 1.15 / 1.93 | 7.4e-14 / 3.6e-13 | 1.17 | ~1e-12 |
+| kick-D3 | 4.9e-3 / 6.7e-3 | 0.33 / 0.41 | 3.8e-4 / 6.3e-4 | 1.00 | 1e-6 / 2e-5 |
+| time-D3 | 8.4e-2 / 5.2e-2 | 1.01 / 0.68 | 4.5e-4 / 2.0e-3 | 1.00 | 6e-6 / 9e-6 |
+| D2 | 1.0e-2 / — | 0.47 / — | 2.9e-4 / — | 1.00 | 1.2e-1 / — |
+
+- **Two-body: every GNN's energy error is bounded with no drift** (late/early 1.00, q ≤ 0.11), as predicted for
+  D3. Its level (kick 3.8e-4 / 6.3e-4, time 4.5e-4 / 2.0e-3 of |U₀|, test / holdout) reflects the learned-vs-true force
+  mismatch, not integration error. So it sits above the 1e-4 integration tolerance used to accept the dataset
+  (reference ~6e-7).
+- **Clusters: kick-D3 stays mostly bounded** (q 0.33–0.41; 30% of test and 29% of holdout clusters reach 1%).
+  **Time-D3 grows**: it steps up at each encounter and reaches 1% on 19/20 and 56/59 clusters, against the
+  "D3 bounded" prediction. This fits its ~6% one-step error at |a| ≥ 1e3, where cluster encounters sit.
+- **Angular momentum:** D3 holds L to float32 round-off level (1e-6–1e-5); D2, with no third law, loses ~12%.
+  This is the clearest effect of the built-in third law.
+- PROJECT_PLAN check, "GNN energy drift between Leapfrog and random": yes. The error is 10²–10³× Leapfrog's, but for
+  D3 it is bounded (two-body, kick clusters), not random-walk or secular.
+
+### G4 answered — generalisation
+- **Clusters: no generalisation gap relative to each cluster's own chaos.** Holdout clusters are more chaotic
+  (baseline horizons 2.8–3.2 vs 3.4–4.0), so the absolute GNN horizons fall. But the yes-share (39% → 21% / 29%),
+  the slope ratios and the horizon fraction all stay at or near the test level, and the energy error is unchanged.
+- **Depth:** the 9 holdout clusters reaching below 0.2ε do no worse than the rest (1/9 yes each; horizon fraction
+  0.57 / 0.50 vs 0.52 / 0.47). With n = 9 this rules out only a large depth penalty. Since there is no cluster
+  generalisation gap, depth has no gap to explain.
+- **Two-body: a gap on the extrapolated orbits** (n = 4 holdout orbits; horizon in orbits, kick / time):
+
+| holdout orbit | peak \|a\| (reference) | kick-D3 | time-D3 |
+|---|---|---|---|
+| equal mass, e 0.6 (interp) | 50 | 1.9 | 0.8 |
+| equal mass, e 0.9 (extrap) | 792 | 0.9 | 0.2 |
+| 5:1, e 0.4 (interp) | 120 | 2.9 | 3.9 |
+| 15:1, e 0.4 (extrap) | 755 | 6.0 | 1.0 |
+
+- Test orbits for comparison, at the nearest settings: equal-mass e 0.8 gives kick 0.9 / time 0.4 orbits; 10:1 e 0.4 gives
+  2.9 / 11.0. **Kick-D3 holds its test level on both extrapolated orbits. Time-D3 collapses on 15:1** (11.0 → 1.0
+  orbits against the 10:1 neighbour) and is weak at e 0.9.
+- Mechanism, checked against existing numbers only: "time weighting under-trains high |a|, and periapsis on high-e and
+  15:1 orbits sits at high |a|". **This is supported only in part.**
+  - Both extrapolated orbits peak at |a| ≈ 750–800, in the 100–1000 band. There, Stage B time-D3 is 2–4× kick's
+    cluster error (0.0047 vs 0.0011–0.0020), and its two-body p90 is higher (0.0072 vs 0.0013–0.0053). But
+    it is not yet at the ~6% band (≥ 1e3).
+  - Test 7:1 and 10:1 at e 0.8 peak higher (1800–3300), yet there time-D3 trails kick by at most 2.6×
+    (0.8 vs 2.1, 1.1 vs 1.1 orbits), against 6× at 15:1.
+  - So peak |a| alone does not explain the 15:1 collapse. A mass ratio outside the training range (max 10) affects
+    time-D3 more than kick-D3, for a reason these numbers do not isolate. Resolved by the one-step check in the addendum below: (a).
+
+### G5 answered — speed
+- Per force call (CPU, single thread, unbatched; median of 15 × 200 calls): true force 16–27 µs, GNN 180–280 µs
+  for N 2–10. **The GNN is ~10–13× slower at every N.**
+- The GNN is fully connected (Stage A), so it is O(N²) like direct summation: the scaling is the same and the constant
+  is ~10–13× larger. A surrogate pays off when the true force is expensive to evaluate, or when it allows larger steps.
+  Neither holds here: gravity is a cheap closed form, and the GNN runs under the same step rule (decision 1, which also adds one
+  true-force call per GNN substep for the step size).
+- The wall-clock vs trajectory-error plot was cut (2026-11-12).
+
+### Unified comparison (Stage C files, shared rules; medians, test / holdout)
+| method | force calls per step | µs per force call (N 4 / 10) | cluster horizon | two-body horizon (orbits) | cluster energy max, character | max \|ΔL\| |
+|---|---|---|---|---|---|---|
+| Leapfrog (reference; chaos baseline = nudged Leapfrog) | 1 | 17 / 22 | 3.4–4.0 / 2.8–3.2 | — (reference) | 1e-4, bounded | ~1e-13 |
+| RK4 | 4 | 17 / 22 | 4.4 / 3.6 | never reaches 0.1 | 3e-9 / 7e-9, slow growth (q 1.2–1.9) | ~1e-12 |
+| kick-D3 (in Leapfrog) | 1 (+1 true-force for the step size) | 196 / 273 | 1.64 / 1.54 | 3.9 / see G4 | 5e-3 / 7e-3, mostly bounded | 1e-6–1e-5 |
+| time-D3 (in Leapfrog) | 1 (+1) | 203 / 280 | 1.66 / 1.28 | 2.5 / see G4 | 8e-2 / 5e-2, grows at encounters | 1e-6–1e-5 |
+| D2 (in Leapfrog) | 1 (+1) | 227 / 255 | 2.15 / — | 6.5 / — | 1e-2, partly bounded | 1.2e-1 |
+
+- Euler was not run on the Stage C files: it is the negative control from Stage 8 (secular drift, spiral-out).
+  Putting it in would need new runs, and the Stage 8 result already places it.
+
+### Against the recorded predictions (10-31)
+- **"Kick wins cluster rollouts":** on conservation yes (17× lower energy error, bounded vs growing). On divergence it is a
+  tie on test (7/18 each), with kick slightly ahead on holdout (12 vs 17 yes, horizon 1.54 vs 1.28).
+- **"Time wins or ties two-body and quiet orbits"** (wording revised per the Project, 2026-11-12): the prediction
+  was stated without a unit. Judged per orbit, which needs no unit, it holds only in its weaker form. On test the two
+  weightings are level: kick lasted longer on 9 orbits, time on 6, with 1 tie, too few to separate them. Time-D3 led only on
+  low-eccentricity 7:1 and 10:1 orbits. On holdout, kick-D3 lasted longer on 3 of 4 orbits, including 6.0 vs 1.0
+  orbits at 15:1, a mass ratio beyond the training range (max 10). (Figure-eight demo, outside the rules:
+  time δ 8e-4 vs kick 5.4e-2 at t = 20.)
+- **"D3 energy bounded":** holds for two-body and kick-D3 clusters, fails for time-D3 clusters.
+- **"Worse on holdout":** wrong for clusters (no gap relative to chaos), right for two-body extrapolation (time-D3 mostly).
+- **Weighting verdict (Project wording, 2026-11-12):** "Kick-D3 is the better surrogate overall: level with time-D3
+  on test rollouts, ahead on holdout (fewer model-error clusters; longer horizons on 3 of 4 extrapolation orbits) and
+  on cluster energy. Time-D3 is more accurate per step at low |a| and leads on some low-eccentricity,
+  high-mass-ratio orbits."
+
+### Limitations
+- One seed per model (seed 0). The cluster false-vote check uses three nudge seeds that share data (indication only).
+- Two-body holdout: n = 4 orbits; test two-body: 16 orbits with one each per setting.
+- Cluster ratios depend more on the cluster than the model (ratios move together across models).
+- Many slope fits have R² < 0.9, mostly on the short 1e-3 windows (all listed in `g2_fits_*.csv`).
+- Only 9 holdout clusters reach below 0.2ε.
+- G5 is time per call only: CPU, unbatched, N ≤ 10.
+- The 15:1 time-D3 collapse is attributed to mass-ratio extrapolation by a one-step check only (addendum), one seed.
+
+### Broke / gotchas
+- pandas was not installed, so the scripts use the `csv` module (as in Stage B).
+- Two processes per job, working the file list from both ends, need per-process temporary file names.
+- Figure-eight: total L = 0, so the camera axis falls back to the plane normal. Its divergence must use δ (3 bodies),
+  not the two-body measure.
+- Plotly could not animate smoothly. The interactive pages moved to three.js (`results/stage_c/orbit_explorer.html`,
+  116 runs, test and holdout).
+
+### State
+**Stage C complete** (G2–G5 answered, unified table above). Deliverables: `gnn/rollout.py`, `gnn/run_rollouts.py`,
+`gnn/metrics.py`, `gnn/g2_slopes.py`, `gnn/g3_conservation.py`, `gnn/g4_generalisation.py`, `gnn/g5_timing.py`, animations
+(`results/stage_c/animation_*.mp4`, `orbit_explorer.html`). Not committed yet. Next: final write-up (Stage 10).
+
+### Addendum (same day): Project answers to the Stage 10 questions, and the 15:1 one-step check
+- **Two-body headline:** the paired per-orbit comparison (9–6–1 on test), then medians in orbital periods with
+  time-unit medians beside them. Judging the 10-31 prediction per orbit is the natural reading, not a rule change.
+  The G2 bullet and the prediction verdict above were revised to the Project's wording. The earlier
+  "kick wins most test two-body orbits" overstated a 9–6–1 split.
+- **|a| mechanism wording:** "consistent with Stage B's per-decade errors (time-D3 worse at |a| 1–10, where the
+  equal-mass and 3:1 orbits sit, and on the high-|a| holdout orbits), but not a complete explanation: test 7:1 and
+  10:1 orbits at e 0.8 also peak at |a| 1800–3300, yet time trails kick by at most 2.6×."
+- **Euler** stays out of the Stage C table, with the note pointing to Stage 8 (energy drift ~100%). This counts as
+  "unified table complete" (Project).
+- **One-step check at 15:1** (`gnn/one_step_check.py` → `results/stage_c/one_step_check.csv`). This is a
+  supplementary diagnostic, with no rollout and no rule change. It is a one-step evaluation (final weights) on all
+  files of each orbit, binned by |a| decade. The reading rule was fixed by the Project before the run: if time-D3's
+  15:1 error at a given |a| is much worse than in-range → (a) mass-ratio extrapolation; if it matches → (b) sustained
+  moderate error.
+
+| median rel. error | \|a\| 1–10 | 10–100 | 100–1000 |
+|---|---|---|---|
+| time-D3, 15:1 holdout (extrapolated) | 3.1e-3 | **2.6e-3** | **2.6e-3** |
+| time-D3, 10:1 e 0.4 test (nearest in-range) | 1.1e-3 | 6.3e-4 | 5.2e-4 |
+| time-D3, 7:1 e 0.4 test | 4.9e-4 | 7.0e-4 | 1.5e-3 |
+| time-D3, 5:1 holdout (in-range control) | 1.9e-4 | 1.2e-3 | 2.0e-3 |
+| time-D3, Stage B test two-body | 3.2e-3 | 1.2e-3 | 8.7e-4 |
+| kick-D3, 15:1 holdout | 8.3e-4 | 2.6e-4 | 3.4e-4 |
+| kick-D3, 10:1 / 7:1 / 5:1 | 0.95–1.5e-3 | 1.0–1.3e-3 | 0.9–0.95e-3 |
+| kick-D3, Stage B test two-body (seed 0) | 8.9e-4 | 1.2e-3 | 7.8e-4 |
+
+- **Reading: (a), mass-ratio extrapolation.**
+  - In the bands where the 15:1 light body spends its orbit (|a| 10–1000), time-D3's error is 4–5× its error on
+    the 10:1 neighbour and 2–3× Stage B's test level. The 5:1 control at 100–1000 (2.0e-3) comes closest, so "much
+    worse" is clearest against the nearest neighbour and Stage B.
+  - Kick-D3's error at 15:1 does not rise. It falls to ~3e-4, below its in-range level.
+  - So the time/kick error ratio flips from ~0.6 at 10:1 to ~8–10 at 15:1.
+  - This matches the horizons under horizon ∝ 1/error (rough). At 10:1 time lasts 3.8× longer (11.0 vs 2.9 orbits),
+    and at 15:1 kick lasts 6× longer (6.0 vs 1.0).
+- **Wording (Project, case (a)):** "time weighting gives high-mass-ratio pairs little weight. Kick weighting favours
+  strong pulls, which at high mass ratio means the heavy body's pull on the light one, so kick-D3 is trained harder
+  where 15:1 needs it."
+- Caveat: "much worse" was not given a number in advance. The 2–5× elevation is clear against the 10:1 neighbour and
+  Stage B but smaller against the 5:1 control at |a| 100–1000. One seed per model.
+- This closes the session 3 open point on the 15:1 collapse.

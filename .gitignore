@@ -8,3 +8,7 @@ results/raw/
 # or superseded when the dataset is regenerated. Kept on disk, not versioned.
 results/*.npy
 results/*.npz
+
+# Stage C interactive pages: trajectory data embedded as base64 (up to ~34 MB each).
+# Regenerable with gnn/orbit_explorer.py, gnn/space_rollouts.py, gnn/interactive_rollouts.py.
+results/stage_c/*.html

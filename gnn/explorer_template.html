@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orbit Explorer</title>
+<style>
+  :root { --ink: #e8e6e0; --muted: #9a988f; --panel: rgba(12, 14, 20, 0.74); --line: rgba(255, 255, 255, 0.14); }
+  html, body { margin: 0; height: 100%; background: #000; color: var(--ink); font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+  canvas#scene { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  .panel { position: fixed; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; backdrop-filter: blur(4px); }
+  #pick { top: 14px; left: 14px; padding: 12px 14px; width: 330px; box-sizing: border-box; }
+  #pick h1 { font-size: 15px; margin: 0 0 10px; font-weight: 600; }
+  .row { display: grid; grid-template-columns: 96px 1fr; gap: 6px 10px; align-items: center; margin-bottom: 6px; }
+  .row span { color: var(--muted); }
+  #facts { color: var(--muted); margin: 8px 0 10px; font-size: 12px; }
+  .clock { font-size: 20px; font-variant-numeric: tabular-nums; margin: 4px 0 8px; }
+  .key { display: grid; grid-template-columns: 18px 1fr; gap: 3px 8px; align-items: center; color: var(--muted); font-size: 12px; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; justify-self: center; }
+  .ghost { width: 11px; height: 11px; border-radius: 50%; border: 1px solid rgba(220,220,220,0.5); background: rgba(220,220,220,0.16); justify-self: center; }
+  .bar { width: 14px; height: 2px; background: #9a9a9a; justify-self: center; }
+  #graphbox { right: 14px; bottom: 66px; padding: 6px; }
+  #graph { display: block; width: 400px; height: 240px; }
+  #controls { left: 50%; transform: translateX(-50%); bottom: 14px; padding: 8px 12px; display: flex; gap: 12px; align-items: center; width: min(880px, calc(100vw - 60px)); box-sizing: border-box; }
+  button, select { background: #1d2230; color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font: inherit; cursor: pointer; }
+  select:disabled { opacity: 0.45; cursor: default; }
+  #pick select { width: 194px; text-overflow: ellipsis; }  /* long run labels stay inside the panel */
+  button:hover, select:hover:enabled { background: #283043; }
+  input[type=range] { flex: 1; accent-color: #3987e5; }
+  .zoom { display: flex; gap: 4px; }
+  .zoom button { min-width: 32px; }
+  label { color: var(--muted); display: flex; gap: 6px; align-items: center; white-space: nowrap; }
+  #error { position: fixed; inset: 0; display: none; place-items: center; padding: 40px; text-align: center; color: #f0a0a0; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+
+<div id="pick" class="panel">
+  <h1>Orbit explorer: GNN vs true force</h1>
+  <div class="row"><span>data set</span><select id="set">
+    <option value="test" selected>test</option><option value="holdout">holdout (new settings)</option>
+  </select></div>
+  <div class="row"><span>orbit</span><select id="kind">
+    <option value="two_body">two-body</option><option value="figure_eight">figure-eight</option><option value="cluster" selected>cluster</option>
+  </select></div>
+  <div class="row"><span>mass ratio</span><select id="mr"></select></div>
+  <div class="row"><span id="thirdLabel">bodies N</span><select id="third"></select></div>
+  <div class="row"><span>run</span><select id="run"></select></div>
+  <div class="row"><span>GNN</span><select id="model"></select></div>
+  <div id="facts"></div>
+  <div class="clock" id="clock">t = 0.00</div>
+  <div class="key" id="key"></div>
+</div>
+
+<div id="graphbox" class="panel"><canvas id="graph"></canvas></div>
+
+<div id="controls" class="panel">
+  <button id="play">▶ Play</button>
+  <input id="slider" type="range" min="0" max="1000" value="0" step="1" aria-label="time">
+  <label>speed <select id="speed">
+    <option value="0.25">×0.25</option><option value="0.5">×0.5</option><option value="1" selected>×1</option>
+    <option value="2">×2</option><option value="4">×4</option><option value="8">×8</option>
+  </select></label>
+  <span class="zoom">
+    <button id="zoomOut" title="zoom out (− key)">−</button><button id="zoomIn" title="zoom in (+ key)">+</button>
+    <button id="resetView" title="back to the starting view">reset view</button>
+  </span>
+  <label><input type="checkbox" id="spin" checked> drift</label>
+</div>
+
+<div id="error"></div>
+
+<script type="application/json" id="data">__DATA__</script>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+const DATA = JSON.parse(document.getElementById("data").textContent);
+const TRAIL = 160;
+
+// ---------- decoding: base64 int16, per sample and body: x y z vx vy vz ----------
+function decode(b64) {
+  const bin = atob(b64), bytes = new Uint8Array(bin.length);
+  for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
+  return new Int16Array(bytes.buffer);
+}
+
+// ---------- scene ----------
+const canvas = document.getElementById("scene");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 50000);
+let controls = null;
+scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+scene.add(sun);
+{
+  const n = 3000, pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+  for (let k = 0; k < n; k++) {
+    const u = Math.random() * 2 - 1, phi = Math.random() * Math.PI * 2, r = 6000 + Math.random() * 6000, s = Math.sqrt(1 - u * u);
+    pos.set([r * s * Math.cos(phi), r * s * Math.sin(phi), r * u], k * 3);
+    const b = 0.35 + Math.random() * 0.65;
+    col.set([b, b, b * (0.9 + Math.random() * 0.1)], k * 3);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  g.setAttribute("color", new THREE.BufferAttribute(col, 3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({ size: 1.6, vertexColors: true, sizeAttenuation: false })));
+}
+const glow = (() => {
+  const c = document.createElement("canvas"); c.width = c.height = 128;
+  const g = c.getContext("2d"), grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grad.addColorStop(0, "rgba(255,255,255,1)"); grad.addColorStop(0.25, "rgba(255,255,255,0.45)"); grad.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = grad; g.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(c);
+})();
+
+// ---------- the run on screen ----------
+let E = null, refArr = null, gnnArr = null, model = Object.keys(DATA.models)[0];
+let bodies = [], group = new THREE.Group();
+scene.add(group);
+let t = 0, tEnd = 1, playing = false, last = null, speed = 1;
+
+function sample(arr, i, b) {                         // position and velocity of body b at stored sample i, scene units
+  const N = E.masses.length, k = (i * N + b) * 6, ps = E.pScale / 32000, vs = E.vScale / 32000;
+  return [arr[k] * ps, arr[k + 1] * ps, arr[k + 2] * ps, arr[k + 3] * vs, arr[k + 4] * vs, arr[k + 5] * vs];
+}
+function at(arr, b, time) {                          // cubic Hermite between samples, using the saved velocities
+  const f = Math.min(Math.max((time - E.t0) / E.dt, 0), E.n - 1);
+  const i = Math.min(Math.floor(f), E.n - 2), s = f - i, h = E.dt;
+  const a = sample(arr, i, b), c = sample(arr, i + 1, b);
+  const s2 = s * s, s3 = s2 * s;
+  const h00 = 2 * s3 - 3 * s2 + 1, h10 = s3 - 2 * s2 + s, h01 = -2 * s3 + 3 * s2, h11 = s3 - s2;
+  return [0, 1, 2].map(d => h00 * a[d] + h10 * h * a[d + 3] + h01 * c[d] + h11 * h * c[d + 3]);
+}
+function divAt(time) {
+  const d = E.div[model], f = Math.min(Math.max((time - E.t0) / E.dt, 0), E.n - 1);
+  const i = Math.min(Math.floor(f), E.n - 2), w = f - i;
+  return d[i] + (d[i + 1] - d[i]) * w;
+}
+
+function clearBodies() {
+  for (const obj of [...group.children]) {
+    group.remove(obj);
+    obj.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+  }
+  bodies = [];
+}
+function makeBodies() {
+  clearBodies();
+  const mMax = Math.max(...E.masses);
+  E.masses.forEach((m, i) => {
+    const colour = new THREE.Color(E.colours[i]);
+    const radius = Math.max(0.16, 0.42 * Math.cbrt(m / mMax));
+    const refMesh = new THREE.Mesh(new THREE.SphereGeometry(radius, 32, 16),
+      new THREE.MeshStandardMaterial({ color: colour, emissive: colour, emissiveIntensity: 0.55, roughness: 0.5 }));
+    const rg = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, color: colour, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.9 }));
+    rg.scale.setScalar(radius * 7); refMesh.add(rg);
+    const gnnMesh = new THREE.Mesh(new THREE.SphereGeometry(radius * 1.05, 32, 16),  // see-through shell: the GNN's prediction
+      new THREE.MeshBasicMaterial({ color: colour, transparent: true, opacity: 0.16, depthWrite: false }));
+    gnnMesh.add(new THREE.Mesh(new THREE.SphereGeometry(radius * 1.06, 12, 6),        // faint sparse mesh so its outline still reads
+      new THREE.MeshBasicMaterial({ color: colour, wireframe: true, transparent: true, opacity: 0.3, depthWrite: false })));
+    const trail = dashed => {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(TRAIL * 3), 3));
+      g.setAttribute("color", new THREE.BufferAttribute(new Float32Array(TRAIL * 3), 3));
+      const mat = dashed
+        ? new THREE.LineDashedMaterial({ vertexColors: true, dashSize: 0.25, gapSize: 0.18, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })
+        : new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+      const line = new THREE.Line(g, mat); line.frustumCulled = false; return line;
+    };
+    const refTrail = trail(false), gnnTrail = trail(true);
+    const lg = new THREE.BufferGeometry(); lg.setAttribute("position", new THREE.BufferAttribute(new Float32Array(6), 3));
+    const link = new THREE.Line(lg, new THREE.LineBasicMaterial({ color: 0xb0b0b0, transparent: true, opacity: 0.75 })); link.frustumCulled = false;
+    group.add(refMesh, gnnMesh, refTrail, gnnTrail, link);
+    bodies.push({ colour, refMesh, gnnMesh, refTrail, gnnTrail, link });
+  });
+}
+function fillTrail(line, arr, b, colour, strength) {
+  const p = line.geometry.attributes.position.array, c = line.geometry.attributes.color.array;
+  const start = Math.max(E.t0, t - E.trailTime);
+  for (let j = 0; j < TRAIL; j++) {
+    const s = j / (TRAIL - 1);
+    p.set(at(arr, b, start + (t - start) * s), j * 3);
+    const fade = strength * Math.pow(s, 1.6);
+    c.set([colour.r * fade, colour.g * fade, colour.b * fade], j * 3);
+  }
+  line.geometry.attributes.position.needsUpdate = true;
+  line.geometry.attributes.color.needsUpdate = true;
+  if (line.material.isLineDashedMaterial) line.computeLineDistances();
+}
+
+function placeCamera() {
+  const n = new THREE.Vector3(...E.spin);
+  const side = new THREE.Vector3().crossVectors(n, Math.abs(n.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0)).normalize();
+  const dist = 10 / Math.tan(THREE.MathUtils.degToRad(22.5)) * 1.25;
+  if (controls) controls.dispose();
+  camera.up.copy(n);
+  camera.position.copy(n.clone().multiplyScalar(Math.cos(0.61)).addScaledVector(side, Math.sin(0.61)).multiplyScalar(dist));
+  camera.lookAt(0, 0, 0);
+  controls = new OrbitControls(camera, canvas);
+  controls.enableDamping = true;
+  controls.autoRotate = document.getElementById("spin").checked;
+  controls.autoRotateSpeed = 0.35;
+  controls.maxDistance = 5000;
+  controls.minDistance = 1;
+  controls.zoomSpeed = 1.2;
+  controls.addEventListener("start", () => { zoomTarget = null; });  // dragging or scrolling cancels a button zoom
+}
+
+// ---------- menus ----------
+const kindSel = document.getElementById("kind"), mrSel = document.getElementById("mr"), thirdSel = document.getElementById("third");
+const modelSel = document.getElementById("model"), thirdLabel = document.getElementById("thirdLabel");
+const setSel = document.getElementById("set"), runSel = document.getElementById("run");
+const uniq = a => [...new Set(a)].sort((x, y) => x - y);
+const thirdKey = () => kindSel.value === "two_body" ? "e" : "N";
+function refreshKinds() {                            // holdout has no figure-eight: grey it out there
+  for (const o of kindSel.options) o.disabled = !DATA.entries.some(e => e.split === setSel.value && e.kind === o.value);
+  if (kindSel.selectedOptions[0].disabled) kindSel.value = [...kindSel.options].find(o => !o.disabled).value;
+}
+function runLabel(e) {                               // tells apart the runs that share mass ratio and N (or e)
+  const i = e.info, tag = e.split === "holdout" ? ` · ${i.category.replace("_", " ")}` : "";
+  if (e.kind === "cluster") return `${e.file.replace("cluster_", "#")} · Q ${i.Q} · closest ${i.closest}ε${tag}`;
+  return `${e.file.replace("two_body_", "#").replace("figure_eight", "figure-eight")}${tag}`;
+}
+function refreshMenus(keep) {
+  const kind = kindSel.value, pool = DATA.entries.filter(e => e.kind === kind && e.split === setSel.value);
+  const mrs = uniq(pool.map(e => e.info.massRatio));
+  const mrPrev = keep ? +mrSel.value : null;
+  mrSel.innerHTML = ""; mrs.forEach(v => mrSel.add(new Option(v === 1 ? "1 (equal)" : `${v} : 1`, v)));
+  if (mrs.includes(mrPrev)) mrSel.value = mrPrev;
+  mrSel.disabled = mrs.length < 2;
+  const key = thirdKey();
+  thirdLabel.textContent = kind === "two_body" ? "eccentricity" : "bodies N";
+  const vals = uniq(pool.filter(e => e.info.massRatio === +mrSel.value).map(e => e.info[key]));
+  const prev = keep ? +thirdSel.value : null;
+  thirdSel.innerHTML = ""; vals.forEach(v => thirdSel.add(new Option(`${v}`, v)));
+  if (vals.includes(prev)) thirdSel.value = prev;
+  thirdSel.disabled = vals.length < 2;
+  refreshRuns(keep);
+}
+function refreshRuns(keep) {
+  const key = thirdKey(), prev = keep ? runSel.value : null;
+  const runs = DATA.entries.filter(e => e.kind === kindSel.value && e.split === setSel.value &&
+    e.info.massRatio === +mrSel.value && e.info[key] === +thirdSel.value);
+  runSel.innerHTML = ""; runs.forEach(e => runSel.add(new Option(runLabel(e), e.file)));
+  if (runs.some(e => e.file === prev)) runSel.value = prev;
+  runSel.disabled = runs.length < 2;
+}
+function refreshModels() {                           // holdout runs carry kick-D3 and time-D3 only
+  const prev = modelSel.value;
+  modelSel.innerHTML = "";
+  for (const k of Object.keys(DATA.models)) if (E.runs[k]) modelSel.add(new Option(DATA.models[k], k));
+  modelSel.value = E.runs[prev] ? prev : modelSel.options[0].value;
+}
+function chosenEntry() { return DATA.entries.find(e => e.file === runSel.value); }
+function load() {
+  E = chosenEntry(); refreshModels(); model = modelSel.value;
+  refArr = decode(E.runs.reference); gnnArr = decode(E.runs[model]);
+  tEnd = E.t0 + (E.n - 1) * E.dt; t = E.t0;
+  makeBodies(); placeCamera(); setPlaying(false); describe(); sizeGraph();
+}
+setSel.onchange = () => { refreshKinds(); refreshMenus(false); load(); };
+kindSel.onchange = () => { refreshMenus(false); load(); };
+mrSel.onchange = () => { refreshMenus(true); load(); };
+thirdSel.onchange = () => { refreshRuns(false); load(); };
+runSel.onchange = () => load();
+modelSel.onchange = () => { model = modelSel.value; gnnArr = decode(E.runs[model]); describe(); };
+
+function describe() {
+  const i = E.info, h = E.horizon[model], label = DATA.models[model];
+  const parts = [];
+  if (E.kind === "two_body") parts.push(`e = ${i.e}`, `period ${E.period.toFixed(3)}`);
+  if (E.kind === "cluster") parts.push(`Q = ${i.Q}`, `closest approach ${i.closest}ε`);
+  if (E.split === "holdout") parts.push(`holdout: ${i.category.replace("_", " ")}`);
+  if (E.kind === "figure_eight") parts.push(`period ${E.period.toFixed(3)}`, "stable orbit, not in the dataset");
+  parts.push(h === null ? "never reaches 0.1" : `horizon t = ${h.toFixed(2)}` + (E.period ? ` (${(h / E.period).toFixed(1)} orbits)` : ""));
+  document.getElementById("facts").textContent = `${E.file} · ` + parts.join(" · ");
+  document.getElementById("key").innerHTML =
+    `<span class="dot" style="background:#ddd"></span><span>solid: real physics (true-force reference)</span>` +
+    `<span class="ghost"></span><span>see-through: the ${label} prediction, dashed trail</span>` +
+    `<span class="bar"></span><span>grey line: that body's error</span>` +
+    E.masses.map((m, k) => `<span class="dot" style="background:${E.colours[k]}"></span><span>m = ${+m.toPrecision(3)}</span>`).join("");
+}
+
+// ---------- corner graph ----------
+const gc = document.getElementById("graph"), gx = gc.getContext("2d");
+function sizeGraph() { const r = window.devicePixelRatio || 1; gc.width = 400 * r; gc.height = 240 * r; gx.setTransform(r, 0, 0, r, 0, 0); }
+function drawGraph() {
+  const W = 400, H = 240, L = 52, R = 10, Tp = 24, B = 30, d = E.div[model], unit = E.period || 1;
+  const pos = d.filter(v => v > 0);
+  const yLo = Math.pow(10, Math.floor(Math.log10(Math.max(Math.min(...pos), 1e-12))));
+  const yHi = Math.pow(10, Math.ceil(Math.log10(Math.max(...pos) * 1.2)));
+  const X = v => L + (v - E.t0 / unit) / ((tEnd - E.t0) / unit) * (W - L - R);
+  const Y = v => Tp + (Math.log10(yHi) - Math.log10(Math.max(v, yLo))) / (Math.log10(yHi) - Math.log10(yLo)) * (H - Tp - B);
+  gx.clearRect(0, 0, W, H); gx.font = "11px system-ui, sans-serif";
+  gx.fillStyle = "#cfcdc6"; gx.textAlign = "left";
+  gx.fillText(`divergence of ${DATA.models[model]} from the reference`, L, 14);
+  gx.strokeStyle = "rgba(255,255,255,0.10)"; gx.fillStyle = "#9a988f"; gx.textAlign = "right"; gx.lineWidth = 1;
+  const decades = Math.log10(yHi) - Math.log10(yLo), every = decades > 8 ? 3 : 2;
+  for (let e = Math.log10(yLo); e <= Math.log10(yHi); e++) {
+    const y = Y(Math.pow(10, e)); gx.beginPath(); gx.moveTo(L, y); gx.lineTo(W - R, y); gx.stroke();
+    if ((Math.log10(yHi) - e) % every === 0) gx.fillText(`1e${e}`, L - 6, y + 4);
+  }
+  gx.textAlign = "center";
+  const span = (tEnd - E.t0) / unit, tick = span > 60 ? 20 : span > 24 ? 10 : span > 12 ? 5 : span > 5 ? 1 : 0.5;
+  for (let v = Math.ceil(E.t0 / unit / tick) * tick; v <= tEnd / unit + 1e-9; v += tick) gx.fillText(`${+v.toFixed(2)}`, X(v), H - B + 14);
+  gx.fillText(E.period ? "orbits" : "time", (L + W - R) / 2, H - 3);
+  gx.save(); gx.translate(11, (Tp + H - B) / 2); gx.rotate(-Math.PI / 2);
+  gx.fillText(E.kind === "two_body" ? "|Δr_rel| / a" : "δ(t), RMS body separation", 0, 0); gx.restore();
+  gx.strokeStyle = "rgba(255,255,255,0.55)"; gx.beginPath(); gx.moveTo(L, Y(0.1)); gx.lineTo(W - R, Y(0.1)); gx.stroke();
+  const h = E.horizon[model];
+  if (h !== null) {
+    gx.setLineDash([3, 3]); gx.beginPath(); gx.moveTo(X(h / unit), Tp); gx.lineTo(X(h / unit), H - B); gx.stroke(); gx.setLineDash([]);
+    gx.fillStyle = "#cfcdc6"; gx.textAlign = "left"; gx.fillText(`horizon t = ${h.toFixed(2)}`, X(h / unit) + 4, H - B - 6);
+  }
+  const curve = (upto, style, width) => {
+    gx.strokeStyle = style; gx.lineWidth = width; gx.beginPath(); let started = false;
+    for (let k = 1; k < E.n; k++) {
+      const tk = E.t0 + k * E.dt; if (tk > upto + 1e-9) break;
+      const x = X(tk / unit), y = Y(d[k]);
+      if (!started) { gx.moveTo(x, y); started = true; } else gx.lineTo(x, y);
+    }
+    gx.stroke(); gx.lineWidth = 1;
+  };
+  curve(tEnd, "rgba(255,255,255,0.18)", 1);
+  curve(t, "#3987e5", 2);
+  gx.fillStyle = "#3987e5"; gx.beginPath(); gx.arc(X(t / unit), Y(divAt(t)), 4, 0, Math.PI * 2); gx.fill();
+}
+
+// ---------- zoom: buttons and keys, on top of scroll / pinch ----------
+let zoomTarget = null;                                // distance the camera is easing towards
+function zoomBy(f) {
+  const d = camera.position.distanceTo(controls.target);
+  zoomTarget = Math.min(Math.max((zoomTarget ?? d) * f, controls.minDistance + 0.5), controls.maxDistance);
+}
+function easeZoom() {
+  if (zoomTarget === null) return;
+  const offset = camera.position.clone().sub(controls.target), d = offset.length();
+  const next = d + (zoomTarget - d) * 0.25;            // a quarter of the way each frame: smooth
+  camera.position.copy(controls.target).add(offset.multiplyScalar(next / d));
+  if (Math.abs(next - zoomTarget) < 1e-3 * zoomTarget) zoomTarget = null;
+}
+document.getElementById("zoomIn").onclick = () => zoomBy(0.7);
+document.getElementById("zoomOut").onclick = () => zoomBy(1 / 0.7);
+document.getElementById("resetView").onclick = () => { zoomTarget = null; placeCamera(); };
+window.addEventListener("keydown", e => {
+  if (e.target.tagName === "SELECT") return;
+  if (e.key === "+" || e.key === "=") zoomBy(0.7);
+  if (e.key === "-" || e.key === "_") zoomBy(1 / 0.7);
+});
+
+// ---------- playback ----------
+const playBtn = document.getElementById("play"), slider = document.getElementById("slider"), clock = document.getElementById("clock");
+function setPlaying(p) { playing = p; playBtn.textContent = p ? "❚❚ Pause" : "▶ Play"; last = null; }
+playBtn.onclick = () => { if (t >= tEnd) t = E.t0; setPlaying(!playing); };
+slider.oninput = () => { t = E.t0 + (tEnd - E.t0) * slider.value / 1000; };
+document.getElementById("speed").onchange = e => { speed = parseFloat(e.target.value); };
+document.getElementById("spin").onchange = e => { controls.autoRotate = e.target.checked; };
+window.addEventListener("keydown", e => { if (e.code === "Space" && e.target.tagName !== "SELECT") { e.preventDefault(); playBtn.click(); } });
+function resize() { const w = window.innerWidth, h = window.innerHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); sizeGraph(); }
+window.addEventListener("resize", resize);
+
+function update() {
+  bodies.forEach((b, i) => {
+    const pr = at(refArr, i, t), pg = at(gnnArr, i, t);
+    b.refMesh.position.set(...pr); b.gnnMesh.position.set(...pg);
+    fillTrail(b.refTrail, refArr, i, b.colour, 1.0);
+    fillTrail(b.gnnTrail, gnnArr, i, b.colour, 0.7);
+    const lp = b.link.geometry.attributes.position.array; lp.set(pg, 0); lp.set(pr, 3); b.link.geometry.attributes.position.needsUpdate = true;
+  });
+  clock.textContent = E.period ? `t = ${t.toFixed(2)}  ·  ${(t / E.period).toFixed(1)} orbits` : `t = ${t.toFixed(2)}`;
+  if (!slider.matches(":active")) slider.value = Math.round((t - E.t0) / (tEnd - E.t0) * 1000);
+  drawGraph();
+}
+function frame(now) {
+  if (playing) {
+    if (last !== null) t = Math.min(t + (now - last) / 1000 * E.defaultRate * speed, tEnd);
+    last = now;
+    if (t >= tEnd) setPlaying(false);
+  }
+  sun.position.copy(camera.position);
+  easeZoom(); controls.update(); update(); renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+// start on the hash if given (e.g. #cluster_01073&t=2), else the first cluster
+const hash = new URLSearchParams(location.hash.slice(1).replace(/^([a-z_0-9]+)(&|$)/, "file=$1$2"));
+const start = DATA.entries.find(e => e.file === hash.get("file")) || DATA.entries.find(e => e.file === "cluster_01073") || DATA.entries[0];
+setSel.value = start.split; refreshKinds();
+kindSel.value = start.kind; refreshMenus(false);
+mrSel.value = start.info.massRatio; refreshMenus(true);
+thirdSel.value = start.kind === "two_body" ? start.info.e : start.info.N; refreshRuns(false);
+runSel.value = start.file;
+resize(); load();
+if (hash.get("model")) { modelSel.value = hash.get("model"); modelSel.onchange(); }
+if (hash.get("t")) t = Math.min(Math.max(parseFloat(hash.get("t")), E.t0), tEnd);
+requestAnimationFrame(frame);
+window.__started = true;
+</script>
+<script>
+  setTimeout(() => {
+    if (!window.__started) {
+      const e = document.getElementById("error"); e.style.display = "grid";
+      e.textContent = "The 3D view didn't start. It loads three.js from cdn.jsdelivr.net, so it needs an internet connection. Press F12 → Console to see the error.";
+    }
+  }, 6000);
+</script>
+</body>
+</html>

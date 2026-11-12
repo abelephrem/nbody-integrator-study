@@ -1,0 +1,5 @@
+model,window,yes,n_voting,median_ratio,never_reached,verdict
+design3_kick_200ep,main,12,58,1.0329003394332004,0,model error in some clusters
+design3_kick_200ep,1e-3,12,58,0.8576067936012761,0,model error in some clusters
+design3_time_200ep,main,17,58,1.0715050130920631,0,model error in some clusters
+design3_time_200ep,1e-3,14,58,1.008987684939686,0,model error in some clusters
