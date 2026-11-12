@@ -12,3 +12,5 @@ results/*.npz
 # Stage C interactive pages: trajectory data embedded as base64 (up to ~34 MB each).
 # Regenerable with gnn/orbit_explorer.py, gnn/space_rollouts.py, gnn/interactive_rollouts.py.
 results/stage_c/*.html
+# orbit_explorer.html is kept as the portfolio piece (~34 MB; each rebuild adds another copy to history).
+!results/stage_c/orbit_explorer.html
