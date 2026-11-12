@@ -46,3 +46,23 @@ See `PROJECT_PLAN.md` in the repo root.
 
 ## Lab notebook
 Append session notes to `labbook.md` — what was done, decisions made, anything that broke.
+## Decision policy (finish-fast mode, from 2026-11-12)
+
+When an edge case or design question comes up, decide it yourself. Don't stop to ask. Follow these steps:
+
+1. **Check the record first.** Search labbook.md, PROJECT_PLAN.md and the decisions docs
+   (stage-b/stage-c-decisions.md) for any earlier decision, test or finding on the same issue. Past diagnostics
+   often already answer it (e.g. 09-05 showed adaptive Leapfrog is fine when resolved).
+2. **List the options, including one that keeps every past decision and rule intact.** If such an option exists,
+   take it. Only accept a trade-off if no downside-free option exists.
+3. **Prefer the option that keeps the comparison fair.** Same data, same windows and same rules for every model
+   and baseline; only the thing being tested should differ.
+4. **If a choice changes what a result means and both versions are cheap (< ~30 min compute), compute both,**
+   report both, and headline the one the pre-set rules in stage-c-decisions.md favour.
+5. **Never change a rule, threshold or window after seeing model results.** Rule changes are only allowed before
+   model data exists, and must be stated openly in the labbook.
+6. **Don't drop data after seeing it** (clusters, files, seeds) unless an existing rule already says to.
+7. **Record every decision in the labbook:** what came up, the options, which was taken and why (one or two lines).
+8. **Only stop** if a result cannot be interpreted under any option. Otherwise put open questions in the
+   end-of-session summary.
+9. **End each session with one short summary:** results, decisions taken under this policy, open questions.
