@@ -1614,3 +1614,48 @@ minority of clusters, and no model reaches a majority.
 - Caveat: "much worse" was not given a number in advance. The 2–5× elevation is clear against the 10:1 neighbour and
   Stage B but smaller against the 5:1 control at |a| 100–1000. One seed per model.
 - This closes the session 3 open point on the 15:1 collapse.
+
+## 2026-11-13 — Stage 10: paper figures (`paper_figures.py`)
+Finish-fast mode. Plot only: no simulation, no training, nothing in `results/` changed. One script, one function per
+figure, output to `figures/paper/` as PDF + 300 dpi PNG. Shared style: 8 pt serif (cmr10, mathtext cm), Okabe–Ito
+colours with a fixed name/colour/line style per method, no titles, panel labels (a), (b).
+
+### Figures
+- Main: `fig1_energy_integrators`, `fig2_one_step_error`, `fig3_divergence_slopes`, `fig4_conservation`,
+  `fig5_two_body_horizons`. Appendix: `fig4_holdout`, `figA1_convergence`, `figA2_rk4_energy_scaling`,
+  `figA3_long_run_scaling`.
+- Fig. 1 replaces `figures/energy_drift.png` (its title said 200 orbits; the runs are 300). The old file is left in place.
+
+### Checks (54 of 54 pass)
+- Fig. 1: every Set B run's max |ΔE/E₀| equals `long_runs.csv` (6/6), and the binned-max curve keeps the global max.
+- Fig. 3: points ≥ 1.5 equal the vote yes-counts: test 7 / 7 / 3, holdout 12 / 17. RK4 control: 0/18 test,
+  5/58 holdout (57/58 reach 0.1), medians 1.02 / 1.03, as in the G2 table.
+- Fig. 4: median max |ΔE/U₀| per kind and method matches `g3_test.csv` and `g3_holdout.csv` (18/18).
+- Fig. 5: all 4 holdout orbits give identical horizons over 5 orientations (kick and time). Test medians 3.88 / 2.50 /
+  6.45 orbits (kick / time / D2). Holdout matches the G4 table (1:1 e 0.6 → 1.88 / 0.76, e 0.9 → 0.90 / 0.20,
+  5:1 → 2.93 / 3.91, 15:1 → 6.01 / 0.99).
+- Fig. A1: fitted orders Euler 0.89, Leapfrog 2.00, RK4 4.37.
+- Fig. A2: two-term fit A h⁴ + B h⁵ (6 points, 1e-3 ≤ h ≤ 0.0465): A = 4.604, B = 772.1, rms log residual 0.0013
+  (natural log; 0.0006 in log10).
+
+### Decisions (finish-fast policy)
+- **Fig. 3(a) "closest to the median":** with 18 clusters the median (1.333) is the mean of the two middle ratios, so
+  those two tie by construction. Options: lower or upper middle. Took the lower (cluster_01089, ratio 1.306);
+  strongest is cluster_01062 (2.309). This was fixed before plotting and does not change any number.
+- **Fig. 5 median check:** a first pass that included never-reaching orbits (horizon = ∞) gave time 3.17 and D2 7.97
+  and failed the check. The labbook's definition is "median of orbits that reach 0.1" (G2 table), so the
+  check now uses that. This is the recorded definition, not a rule change. Never-reaching orbits are drawn as
+  arrows (D2 on 1:1 e 0 and e 0.2; time-D3 on 7:1 e 0).
+- **Fig. 3(c) RK4 columns:** RK4 slopes exist in `g2_fits_*.csv`, so RK4 is shown as a grey control inside each split
+  group. Its ratio is RK4 main-window slope ÷ the same baseline mean used for the models (voting clusters only).
+- **Fig. 1 envelope:** max within bins of 10 steps (40 bins per orbit), so Leapfrog's per-orbit oscillation shows as a band.
+- **Fig. 2:** one-step errors recomputed with `gnn/evaluate.py` functions (test split, final weights, seed 0, no training).
+  Cached outside the repo at `C:/nbody_results/paper_cache/`.
+- **Fig. A2 markers:** filled = in the two-term fit window; open black = outside the window (h = 4.6e-4, 0.1);
+  open grey = round-off floor (`in_fit` False in `energy_scaling.csv`).
+- **Fig. 4 L label:** written as Σᵢ rather than \sum_i, because mathtext puts the i underneath the sum and the
+  label grows too tall. The meaning is the same.
+
+### Broke / gotchas
+- cmr10 has no underscore glyph, so cluster names are printed as "cluster 01089". It also has no minus sign, which is
+  fixed by `axes.formatter.use_mathtext`.
