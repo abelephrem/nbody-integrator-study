@@ -1659,3 +1659,13 @@ colours with a fixed name/colour/line style per method, no titles, panel labels 
 ### Broke / gotchas
 - cmr10 has no underscore glyph, so cluster names are printed as "cluster 01089". It also has no minus sign, which is
   fixed by `axes.formatter.use_mathtext`.
+
+## 2026-11-15 — Paper Fig. 4 redrawn at column size
+
+- The paper uses the test-cluster column of `g3_test.png` as Fig. 4; at column width its text was too small to read.
+- New script `gnn/g3_column_figure.py` redraws those two panels at 3.5 in wide (about 8 pt text), with the same
+  computation and colours as `gnn/g3_conservation.py`, legend names kick-D3 / time-D3 / D2 and axis labels in maths.
+  Output: `results/stage_c/g3_test_clusters_column.png`.
+- Check: median max |ΔE/U₀| for all five methods matches `g3_test.csv` (5/5).
+- Decision: kept the original g3 colours rather than the `paper_figures.py` palette, because the other paper figures are
+  the original repo figures and their colours should agree.
